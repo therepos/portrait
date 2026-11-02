@@ -12,5 +12,6 @@ RUN useradd --create-home --uid 1000 app
 USER app
 
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
+# the app listens on 8000, the GPU helper (python -m app.broker) on 9000
+HEALTHCHECK --interval=30s --timeout=5s CMD ["python", "-m", "app.healthcheck"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
