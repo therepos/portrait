@@ -84,41 +84,54 @@ async def restore(picture: Image.Image, size, on_status=lambda s: None) -> Image
             detail = r.json().get("error", {}).get("message", r.text[:200]) if r.headers.get("content-type", "").startswith("application/json") else r.text[:200]
             raise ComfyError(f"ComfyUI rejected the workflow: {detail}")
         prompt_id = r.json()["prompt_id"]
+        try:
+            return await _wait(http, prompt_id, outputs, size, on_status)
+        except (asyncio.CancelledError, ComfyError):
+            await _cancel(http, prompt_id)
+            raise
 
-        start = time.monotonic()
-        while time.monotonic() - start < TIMEOUT:
-            await asyncio.sleep(2)
-            hist = (await http.get(f"/history/{prompt_id}")).json().get(prompt_id)
-            if not hist:
-                q = (await http.get("/queue")).json()
-                running = any(item[1] == prompt_id for item in q.get("queue_running", []))
-                on_status("running" if running else "queued")
-                continue
-            status = hist.get("status", {})
-            if status.get("status_str") == "error":
-                msgs = [m[1].get("exception_message", "") for m in status.get("messages", []) if m[0] == "execution_error"]
-                msg = msgs[0].strip() if msgs else "unknown error"
-                if "out of memory" in msg.lower():
-                    raise ComfyError("ComfyUI ran out of GPU memory. Another program may be using the graphics card.")
-                raise ComfyError("ComfyUI failed: " + msg.splitlines()[0][:200])
-            for key in outputs:
-                images = hist.get("outputs", {}).get(key, {}).get("images", [])
-                if images:
-                    img = images[0]
-                    r = await http.get("/view", params={"filename": img["filename"],
-                                                        "subfolder": img.get("subfolder", ""),
-                                                        "type": img.get("type", "output")})
-                    r.raise_for_status()
-                    out = Image.open(io.BytesIO(r.content)).convert("RGB")
-                    return out if out.size == size else out.resize(size, Image.LANCZOS)
-            if status.get("completed"):
-                raise ComfyError("ComfyUI finished without producing an image.")
-        try:  # drop it from the queue, or stop it if already running
-            await http.post("/queue", json={"delete": [prompt_id]})
+
+async def _cancel(http, prompt_id):
+    """Drop the job from ComfyUI's queue, or stop it if it is already running."""
+    try:
+        await http.post("/queue", json={"delete": [prompt_id]})
+        q = (await http.get("/queue")).json()
+        if any(item[1] == prompt_id for item in q.get("queue_running", [])):
             await http.post("/interrupt", json={"prompt_id": prompt_id})
-        except httpx.HTTPError:
-            pass
-        raise ComfyError(f"ComfyUI took longer than {int(TIMEOUT)} s.")
+    except (httpx.HTTPError, ValueError):
+        pass
+
+
+async def _wait(http, prompt_id, outputs, size, on_status):
+    start = time.monotonic()
+    while time.monotonic() - start < TIMEOUT:
+        await asyncio.sleep(2)
+        hist = (await http.get(f"/history/{prompt_id}")).json().get(prompt_id)
+        if not hist:
+            q = (await http.get("/queue")).json()
+            running = any(item[1] == prompt_id for item in q.get("queue_running", []))
+            on_status("running" if running else "queued")
+            continue
+        status = hist.get("status", {})
+        if status.get("status_str") == "error":
+            msgs = [m[1].get("exception_message", "") for m in status.get("messages", []) if m[0] == "execution_error"]
+            msg = msgs[0].strip() if msgs else "unknown error"
+            if "out of memory" in msg.lower():
+                raise ComfyError("ComfyUI ran out of GPU memory. Another program may be using the graphics card.")
+            raise ComfyError("ComfyUI failed: " + msg.splitlines()[0][:200])
+        for key in outputs:
+            images = hist.get("outputs", {}).get(key, {}).get("images", [])
+            if images:
+                img = images[0]
+                r = await http.get("/view", params={"filename": img["filename"],
+                                                    "subfolder": img.get("subfolder", ""),
+                                                    "type": img.get("type", "output")})
+                r.raise_for_status()
+                out = Image.open(io.BytesIO(r.content)).convert("RGB")
+                return out if out.size == size else out.resize(size, Image.LANCZOS)
+        if status.get("completed"):
+            raise ComfyError("ComfyUI finished without producing an image.")
+    raise ComfyError(f"ComfyUI took longer than {int(TIMEOUT)} s.")
 
 
 async def free():

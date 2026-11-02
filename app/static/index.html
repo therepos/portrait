@@ -97,7 +97,7 @@
         <button id="showOriginal" aria-pressed="false">Original</button>
         <button id="showRestored" aria-pressed="true">Restored</button>
       </div>
-      <p class="muted">Sharpens the photo with ComfyUI. Takes a while; set the framing first.</p>
+      <p class="muted">Sharpens the photo with ComfyUI. Takes a while; set the framing first, it is locked while restoring.</p>
     </div>
     <div class="row">
       <a id="download" class="btn primary disabled" download="card.png">Download</a>
@@ -155,7 +155,9 @@ function updateRestoreUi() {
   $("restoreBox").hidden = !state.canRestore || !state.id;
   $("viewToggle").hidden = !state.restored;
   $("restore").hidden = state.restored;
-  $("restore").disabled = !!restoring;
+  $("restore").textContent = restoring ? "Cancel restore" : "Restore with AI";
+  // the restore is for the current framing, so framing is locked while it runs
+  document.querySelectorAll("#zoom, #photo, .nudge button").forEach((el) => { el.disabled = !!restoring; });
   $("showOriginal").setAttribute("aria-pressed", String(!state.showRestored));
   $("showRestored").setAttribute("aria-pressed", String(state.showRestored));
 }
@@ -259,6 +261,14 @@ async function startRestore(allowPause) {
 }
 
 $("restore").addEventListener("click", async () => {
+  if (restoring) {
+    const job = restoring;
+    $("restore").disabled = true;
+    status("Cancelling…");
+    await fetch("api/restore/" + job + "/cancel", { method: "POST" });
+    restoring = null; $("restore").disabled = false; updateRestoreUi();
+    return status("Restore cancelled.");
+  }
   $("restore").disabled = true;
   const job = await startRestore(storedAllow());
   $("restore").disabled = false;
@@ -277,6 +287,7 @@ $("restore").addEventListener("click", async () => {
       return status("Restored in " + s.seconds + " s.");
     }
     if (s.state === "error") { restoring = null; updateRestoreUi(); return status(s.error, true); }
+    if (s.state === "cancelled") { restoring = null; updateRestoreUi(); return status("Restore cancelled."); }
     status((words[s.state] || s.state) + "… " + s.seconds + " s");
     await new Promise((ok) => setTimeout(ok, 2000));
   }

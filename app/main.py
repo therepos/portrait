@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -22,7 +23,17 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
-app = FastAPI(title="Portrait card maker")
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    # shutting down (e.g. an update): cancel restores so their GPU pause is handed back now
+    tasks = [j["task"] for j in _jobs.values() if j.get("task") and not j["task"].done()]
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+app = FastAPI(title="Portrait card maker", lifespan=lifespan)
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # id -> photo, face, restored
 _jobs: "OrderedDict[str, dict]" = OrderedDict()    # restore jobs
 
@@ -111,11 +122,21 @@ async def _run_restore(job, entry, framing, pause):
     try:
         if pause:
             job["state"] = "pausing"
-            lease = await gpu.pause()
+            pausing = asyncio.ensure_future(gpu.pause())
+            try:
+                lease = await asyncio.shield(pausing)
+            except asyncio.CancelledError:  # cancelled mid-pause: still collect the lease to give it back
+                try:
+                    lease = await pausing
+                except gpu.PauseError:
+                    pass
+                raise
             await gpu.wait_for_vram(comfy.vram_free)
         result = await comfy.restore(picture, size, status)
         entry["restored"] = (framing, result)
         job["state"] = "done"
+    except asyncio.CancelledError:
+        job["state"] = "cancelled"
     except (comfy.ComfyError, gpu.PauseError) as e:
         job.update(state="error", error=str(e))
     except Exception as e:
@@ -158,6 +179,21 @@ async def start_restore(id: str = Form(...), zoom: float = Form(1.0), dx: int = 
     while len(_jobs) > 50:
         _jobs.popitem(last=False)
     return {"job": job_id}
+
+
+@app.post("/api/restore/{job_id}/cancel")
+async def cancel_restore(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown restore job.")
+    task = job.get("task")
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task  # wait until ComfyUI has dropped it and the GPU is handed back
+        except asyncio.CancelledError:
+            pass
+    return {"state": job["state"]}
 
 
 @app.get("/api/restore/{job_id}")
