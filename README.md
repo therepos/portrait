@@ -54,8 +54,8 @@ docker compose pull && docker compose up -d
 A face detector ([YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet))
 finds the largest face and its eyes. The photo is scaled so the face box is 35% of
 the card width, the face is centred horizontally, and the eye line sits 38% from the
-top. These numbers were measured from a hand-made card and live at the top of
-`app/card.py`.
+top. These numbers were measured from a hand-made card and live in the template
+(see below).
 
 ## Settings
 
