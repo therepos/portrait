@@ -6,12 +6,11 @@ import re
 import time
 import uuid
 from collections import OrderedDict
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import card, comfy, gpu
 
@@ -23,14 +22,7 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
-@asynccontextmanager
-async def lifespan(app):
-    yield
-    if gpu.enabled():
-        await gpu.shutdown()
-
-
-app = FastAPI(title="Portrait card maker", lifespan=lifespan)
+app = FastAPI(title="Portrait card maker")
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # id -> photo, face, restored
 _jobs: "OrderedDict[str, dict]" = OrderedDict()    # restore jobs
 
@@ -58,7 +50,7 @@ def healthz():
 
 @app.get("/api/config")
 def config():
-    return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled()}
+    return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled(), "can_pause": gpu.enabled()}
 
 
 @app.post("/api/photo")
@@ -103,7 +95,7 @@ async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(
     return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
-async def _run_restore(job, entry, framing):
+async def _run_restore(job, entry, framing, pause):
     t = card.TEMPLATE
     size = comfy.model_size(t.width, t.height)
     box = card.frame(entry["photo"], entry["face"], *framing, extra_h=size[1] - t.height)
@@ -115,12 +107,12 @@ async def _run_restore(job, entry, framing):
     def status(s):
         job["state"] = s
 
-    paused = False
+    lease = None
     try:
-        if gpu.enabled():
+        if pause:
             job["state"] = "pausing"
-            await gpu.pause(comfy.URL)
-            paused = True
+            lease = await gpu.pause()
+            await gpu.wait_for_vram(comfy.vram_free)
         result = await comfy.restore(picture, size, status)
         entry["restored"] = (framing, result)
         job["state"] = "done"
@@ -129,27 +121,42 @@ async def _run_restore(job, entry, framing):
     except Exception as e:
         job.update(state="error", error=f"Restore failed ({e.__class__.__name__}).")
     finally:
-        if paused:  # hand the GPU back whatever happened
+        if lease:  # hand the GPU back whatever happened
             await comfy.free()
-            await gpu.resume()
+            await gpu.resume(lease)
     job["finished"] = time.monotonic()
 
 
 @app.post("/api/restore")
-async def start_restore(id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
+async def start_restore(id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
+                        allow_pause: bool = Form(False)):
     if not comfy.enabled():
         raise HTTPException(400, "AI restore is not set up on this server.")
     entry = _get(id)
     framing = _framing(zoom, dx, dy)
     job_id = uuid.uuid4().hex
     job = {"state": "queued", "started": time.monotonic()}
-    _jobs[job_id] = job
-    while len(_jobs) > 50:
-        _jobs.popitem(last=False)
     if entry["restored"] and entry["restored"][0] == framing:
         job["state"] = "done"
     else:
-        job["task"] = asyncio.create_task(_run_restore(job, entry, framing))
+        pause = False
+        free = await comfy.vram_free()
+        if free is not None and free < gpu.NEED_GB * 2**30:
+            await comfy.free()  # ComfyUI may just be holding models from an earlier job
+            await asyncio.sleep(2)
+            free = await comfy.vram_free() or free
+        if free is not None and free < gpu.NEED_GB * 2**30:
+            units = await gpu.active_units()
+            need, have = gpu.NEED_GB, round(free / 2**30, 1)
+            if not units:
+                raise HTTPException(409, f"Not enough free GPU memory ({have} GB free, about {need:g} GB needed).")
+            if not allow_pause:
+                return JSONResponse({"needs_pause": True, "units": units, "free_gb": have, "need_gb": need}, 409)
+            pause = True
+        job["task"] = asyncio.create_task(_run_restore(job, entry, framing, pause))
+    _jobs[job_id] = job
+    while len(_jobs) > 50:
+        _jobs.popitem(last=False)
     return {"job": job_id}
 
 

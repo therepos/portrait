@@ -66,8 +66,8 @@ top. These numbers were measured from a hand-made card and live in the template
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
 | `COMFYUI_TIMEOUT` | `900` | Seconds to wait for one restore |
-| `PAUSE_UNIT` | unset | systemd unit to stop during a restore (see below) |
-| `PAUSE_HEALTH_URL` | unset | Health URL of that unit, checked after it starts again |
+| `GPU_HELPER_URL` | unset | Address of the GPU helper container (see below) |
+| `RESTORE_VRAM_GB` | `16` | Free GPU memory a restore needs before it runs |
 | `MAX_UPLOAD_MB` | `40` | Largest accepted upload |
 | `MAX_PHOTOS` | `20` | Uploaded photos kept in memory for re-rendering |
 
@@ -98,40 +98,44 @@ card, ComfyUI reports out of memory and the app shows that.
 
 ### Freeing the GPU from another service
 
-If a systemd service on the host (for example a local LLM server) holds the GPU, the
-app can stop it for the length of a restore and start it again afterwards:
+If a systemd service on the host (for example a local LLM server) holds the GPU, a small
+helper container can pause it for the length of a restore. Before each restore the app
+checks free GPU memory through ComfyUI. If there isn't enough, it first lets ComfyUI drop
+its own cached models; if that's still not enough, the page asks **Pause it during this
+restore?** (with an *Always allow* option) before anything is stopped.
+
+Add the helper to the same compose file:
 
 ```yaml
+  portrait:
+    # ...as above, plus:
     environment:
-      PAUSE_UNIT: llama.service
-      PAUSE_HEALTH_URL: http://host.docker.internal:8080/health   # optional, for the log
+      GPU_HELPER_URL: http://portrait-gpu:9000
+    networks: [default, gpu]
+
+  portrait-gpu:
+    image: ghcr.io/therepos/portrait:latest
+    command: ["python", "-m", "app.broker"]
+    user: "0:0"                     # root, to control systemd; no host setup needed
+    environment:
+      PAUSE_UNITS: llama.service    # comma-separated; only these can be paused
     volumes:
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
-    extra_hosts:
-      - host.docker.internal:host-gateway
     security_opt:
-      - apparmor=unconfined   # Docker's default AppArmor profile blocks D-Bus
+      - apparmor=unconfined         # Docker's default AppArmor profile blocks D-Bus
+    networks: [gpu]
+    restart: unless-stopped
+
+networks:
+  gpu:
+    internal: true                  # only the app can reach the helper
 ```
 
-The container's user (uid 1000 by default) needs permission to start and stop that one
-unit. Install a polkit rule on the host, replacing the user and unit names:
-
-```js
-// /etc/polkit-1/rules.d/50-portrait-gpu.rules
-polkit.addRule(function (action, subject) {
-    if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "llama.service" &&
-        ["start", "stop"].indexOf(action.lookup("verb")) >= 0 &&
-        subject.user == "toor") {
-        return polkit.Result.YES;
-    }
-});
-```
-
-The service is started again when the restore finishes, fails or times out, and when the
-app shuts down. A service that was already stopped is left stopped. After the restore,
-ComfyUI is asked to unload its models first. Anything using the service is cut off while
-it is paused.
+The helper accepts only *pause* and *resume*, only for `PAUSE_UNITS`, and publishes no
+port. Paused services are started again when the restore finishes or fails, after
+`PAUSE_MAX_MINUTES` (default 30) if the app never reports back, and when the helper
+stops. A service that was already stopped is left stopped. Anything using the service
+is cut off while it is paused.
 
 ## Develop
 

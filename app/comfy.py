@@ -128,3 +128,12 @@ async def free():
             await http.post("/free", json={"unload_models": True, "free_memory": True})
     except httpx.HTTPError:
         pass
+
+
+async def vram_free():
+    """Free GPU memory in bytes as ComfyUI sees it, or None if unknown."""
+    try:
+        async with httpx.AsyncClient(base_url=URL, timeout=10) as http:
+            return (await http.get("/system_stats")).json()["devices"][0]["vram_free"]
+    except (httpx.HTTPError, KeyError, IndexError, ValueError):
+        return None

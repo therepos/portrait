@@ -52,6 +52,11 @@
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: max-content; }
   .seg button { border: 0; border-radius: 0; }
   .seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-text); }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
+           max-width: min(420px, calc(100vw - 32px)); padding: 20px; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog p { margin: 0 0 14px; }
+  .check { display: flex; gap: 8px; align-items: center; color: var(--text); margin-bottom: 16px; }
   #status { font-size: 14px; color: var(--muted); min-height: 1.4em; margin: 0; }
   #status.error { color: var(--error); }
   .muted { color: var(--muted); font-size: 13px; margin: 0; }
@@ -105,6 +110,16 @@
     <img id="card" alt="Card preview" hidden>
   </section>
 </main>
+<dialog id="pauseDialog">
+  <form method="dialog">
+    <p id="pauseText"></p>
+    <label class="check"><input id="alwaysPause" type="checkbox"> Always allow, don't ask again</label>
+    <div class="row">
+      <button value="ok" class="primary">Pause and restore</button>
+      <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { id: null, dx: 0, dy: 0, url: null, restored: false, showRestored: true, canRestore: false };
@@ -209,10 +224,45 @@ $("reset").addEventListener("click", () => {
   state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%"; framingChanged();
 });
 
+function storedAllow() {
+  try { return localStorage.getItem("portrait.alwaysPause") === "1"; } catch { return false; }
+}
+
+function askToPause(info) {
+  $("pauseText").textContent = info.units.join(", ") + " is using the graphics card (" + info.free_gb +
+    " GB free, about " + info.need_gb + " GB needed). Pause it during this restore? It starts again automatically afterwards.";
+  $("alwaysPause").checked = false;
+  $("pauseDialog").returnValue = "";
+  $("pauseDialog").showModal();
+  return new Promise((done) => $("pauseDialog").addEventListener("close", () => {
+    const ok = $("pauseDialog").returnValue === "ok";
+    if (ok && $("alwaysPause").checked) { try { localStorage.setItem("portrait.alwaysPause", "1"); } catch {} }
+    done(ok);
+  }, { once: true }));
+}
+
+async function startRestore(allowPause) {
+  const f = form(false);
+  f.append("allow_pause", allowPause ? "true" : "false");
+  const res = await fetch("api/restore", { method: "POST", body: f });
+  if (res.status === 409) {
+    const info = await res.json();
+    if (info.needs_pause) {
+      if (!(await askToPause(info))) { status("Restore cancelled."); return null; }
+      return startRestore(true);
+    }
+    status(info.detail || "Not enough free GPU memory.", true);
+    return null;
+  }
+  if (!res.ok) { status(await errorText(res), true); return null; }
+  return (await res.json()).job;
+}
+
 $("restore").addEventListener("click", async () => {
-  const res = await fetch("api/restore", { method: "POST", body: form(false) });
-  if (!res.ok) return status(await errorText(res), true);
-  const job = (await res.json()).job;
+  $("restore").disabled = true;
+  const job = await startRestore(storedAllow());
+  $("restore").disabled = false;
+  if (!job) return;
   restoring = job; updateRestoreUi();
   const words = { pausing: "Freeing the graphics card", queued: "Waiting for ComfyUI", running: "Restoring" };
   while (restoring === job) {

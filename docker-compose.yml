@@ -11,3 +11,19 @@ services:
       SAVE_DIR: /output
     volumes:
       - ./output:/output
+
+# Optional: pause a GPU-hungry host service (e.g. a local LLM) during AI restore.
+# See "Freeing the GPU from another service" in the README.
+#
+#   portrait-gpu:
+#     image: ghcr.io/therepos/portrait:latest
+#     command: ["python", "-m", "app.broker"]
+#     user: "0:0"
+#     environment:
+#       PAUSE_UNITS: llama.service
+#     volumes:
+#       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+#     security_opt:
+#       - apparmor=unconfined
+#     networks: [gpu]
+#     restart: unless-stopped
