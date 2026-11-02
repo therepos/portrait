@@ -26,6 +26,7 @@ AUTO_RESIZE = {"FluxKontextImageScale", "ImageScaleToTotalPixels", "ImageScaleTo
 OUTPUT_NODES = {"SaveImage", "SaveImageAdvanced", "PreviewImage"}
 SAMPLERS = {"KSampler", "KSamplerAdvanced", "RandomNoise"}
 MULTIPLE = 16  # the model works in 16-pixel steps
+MEGAPIXELS = float(os.environ.get("COMFYUI_MEGAPIXELS", "1.0"))
 
 
 class ComfyError(RuntimeError):
@@ -37,9 +38,21 @@ def enabled():
 
 
 def model_size(w, h):
-    """Smallest size at or above w x h that the model accepts."""
-    up = lambda v: -(-v // MULTIPLE) * MULTIPLE
-    return up(w), up(h)
+    """Size the model works at: about MEGAPIXELS, multiples of 16, as close as possible
+    to the card's shape and never wider (the extra height is trimmed afterwards).
+    Qwen Image Edit keeps the picture faithful near 1 MP and starts redrawing it when
+    asked for much more."""
+    target = MEGAPIXELS * 1_000_000
+    best = None
+    for mw in range(MULTIPLE * 32, MULTIPLE * 160, MULTIPLE):
+        mh = -(-mw * h // w)            # at least the card's height for this width
+        mh = -(-mh // MULTIPLE) * MULTIPLE
+        if abs(mw * mh - target) > 0.1 * target:
+            continue
+        err = mh / mw - h / w            # extra height to trim, as a share
+        if best is None or err < best[0]:
+            best = (err, mw, mh)
+    return best[1], best[2]
 
 
 def _prepare(image_name, size):

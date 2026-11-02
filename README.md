@@ -66,6 +66,7 @@ top. These numbers were measured from a hand-made card and live in the template
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
 | `COMFYUI_TIMEOUT` | `900` | Seconds to wait for one restore |
+| `COMFYUI_MEGAPIXELS` | `1.0` | Size the model works at; the result is scaled to the card |
 | `GPU_HELPER_URL` | unset | Address of the GPU helper container (see below) |
 | `RESTORE_VRAM_GB` | `16` | Free GPU memory a restore needs before it runs |
 | `MAX_UPLOAD_MB` | `40` | Largest accepted upload |
@@ -89,8 +90,11 @@ The app changes only three things in the workflow: the image fed to its single
 **Load Image** node, the resize step in front of the model (an automatic resize such as
 `FluxKontextImageScale` is replaced by an exact resize), and the sampler seed. The
 prompt and models come from your file. It sends the framed crop at the photo's own
-resolution (never enlarged by the app) and asks for card width × card height rounded
-up to multiples of 16, then trims the extra rows. Results are saved by ComfyUI as the
+resolution (shrunk only if larger) and has the model work at about
+`COMFYUI_MEGAPIXELS` (default 1.0) in the card's shape, e.g. 896×1152 for 1200×1541.
+Qwen Image Edit stays faithful to the photo near 1 MP but starts re-composing it when
+asked for much more. The result is enlarged slightly to card size and the few extra rows
+are trimmed. Results are saved by ComfyUI as the
 workflow says, and fetched over its API.
 
 Restoring needs enough free GPU memory for the model; if another program holds the

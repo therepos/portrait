@@ -109,7 +109,9 @@ async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(
 async def _run_restore(job, entry, framing, pause):
     t = card.TEMPLATE
     size = comfy.model_size(t.width, t.height)
-    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=size[1] - t.height)
+    # the model's shape at card width; a few extra rows at the bottom get trimmed
+    card_size = (t.width, round(t.width * size[1] / size[0]))
+    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=card_size[1] - t.height)
     # send the photo's own pixels; only shrink when there are more than needed
     box_w, box_h = box[2] - box[0], box[3] - box[1]
     send = size if box_w >= size[0] else (round(box_w), round(box_h))
@@ -133,7 +135,7 @@ async def _run_restore(job, entry, framing, pause):
                 raise
             await gpu.wait_for_vram(comfy.vram_free)
         result = await comfy.restore(picture, size, status)
-        entry["restored"] = (framing, result)
+        entry["restored"] = (framing, result.resize(card_size, card.Image.LANCZOS))
         job["state"] = "done"
     except asyncio.CancelledError:
         job["state"] = "cancelled"
