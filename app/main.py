@@ -1,52 +1,66 @@
-"""Web app: upload a photo once, then re-render the card as the user tweaks it."""
+"""Web app: restore photos with AI and make portrait cards; history per browser."""
 import asyncio
 import logging
 import os
 import re
-import time
+import secrets
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from . import card, comfy, gpu
+from . import card, comfy, gpu, jobs, store
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
-MAX_PHOTOS = int(os.environ.get("MAX_PHOTOS", "20"))   # photos kept in memory
+MAX_PHOTOS = int(os.environ.get("MAX_PHOTOS", "20"))   # portrait photos kept in memory
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
+RESTORE_MAX_SIDE = 2048  # restored photos are at most this big on the long side
+COOKIE = "portrait_owner"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
 @asynccontextmanager
 async def lifespan(app):
+    tasks = [asyncio.create_task(jobs.worker()), asyncio.create_task(jobs.cleanup())]
     yield
-    # shutting down (e.g. an update): cancel restores so their GPU pause is handed back now
-    tasks = [j["task"] for j in _jobs.values() if j.get("task") and not j["task"].done()]
-    for t in tasks:
+    for t in tasks:  # the worker hands a paused GPU service back as it stops
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="Portrait card maker", lifespan=lifespan)
-_photos: "OrderedDict[str, dict]" = OrderedDict()  # id -> photo, face, restored
-_jobs: "OrderedDict[str, dict]" = OrderedDict()    # restore jobs
+_photos: "OrderedDict[str, dict]" = OrderedDict()  # portrait session id -> photo, face
 
 
-def _get(photo_id):
-    if photo_id not in _photos:
-        raise HTTPException(404, "Photo expired, please upload it again.")
-    _photos.move_to_end(photo_id)
-    return _photos[photo_id]
+@app.middleware("http")
+async def owner_cookie(request: Request, call_next):
+    """Each browser gets a random id; its history is only visible to it."""
+    owner = request.cookies.get(COOKIE)
+    if not owner or not owner.isalnum():
+        owner = secrets.token_hex(16)
+        request.state.new_owner = owner
+    request.state.owner = owner
+    response = await call_next(request)
+    if getattr(request.state, "new_owner", None):
+        response.set_cookie(COOKIE, owner, max_age=10 * 365 * 86400, httponly=True, samesite="lax")
+    return response
 
 
-def _framing(zoom, dx, dy):
-    return (round(min(max(zoom, 0.5), 2.5), 3), dx, dy)
+def _owner(request):
+    return request.state.owner
+
+
+def _item(request, item_id):
+    try:
+        return store.owned(item_id, _owner(request))
+    except KeyError:
+        raise HTTPException(404, "Not found. It may have expired.")
 
 
 @app.get("/")
@@ -61,150 +75,203 @@ def healthz():
 
 @app.get("/api/config")
 def config():
-    return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled(), "can_pause": gpu.enabled()}
+    return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled(), "can_pause": gpu.enabled(),
+            "retention_days": store.RETENTION_DAYS}
+
+
+async def _read_upload(photo: UploadFile):
+    data = await photo.read()
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(413, f"Photo is over {MAX_UPLOAD_MB} MB.")
+    try:
+        return await run_in_threadpool(card.load_photo, data)
+    except Exception:
+        raise HTTPException(400, "Could not read that file as a photo.")
+
+
+async def _pause_check(allow_pause):
+    """None if a restore can go ahead, else a 409 reply asking to pause a service."""
+    if allow_pause or jobs._lease or not comfy.enabled():
+        return None
+    if any(i.get("allow_pause") for i in store.all_items() if i["state"] in ("queued", "pausing", "running")):
+        return None  # a restore already allowed to pause is ahead; this one runs in the same batch
+    free = await comfy.vram_free()
+    if free is None or free >= gpu.NEED_GB * 2**30:
+        return None
+    units = await gpu.active_units()
+    if not units:
+        return None  # nothing to pause; the queue reports if it really doesn't fit
+    return JSONResponse({"needs_pause": True, "units": units, "free_gb": round(free / 2**30, 1),
+                         "need_gb": gpu.NEED_GB}, 409)
+
+
+def _thumb_of_source(item, im):
+    t = im.convert("RGB")
+    t.thumbnail((store.THUMB, store.THUMB))
+    t.save(store.path(item, "source_thumb.jpg"), "JPEG", quality=80)
+
+
+# ---- history ---------------------------------------------------------------
+
+def _public(item):
+    keep = ("id", "kind", "created", "state", "error", "name", "seconds", "progress", "eta_seconds",
+            "target_size", "origin")
+    return {k: item[k] for k in keep if k in item}
+
+
+@app.get("/api/items")
+def list_items(request: Request):
+    items = jobs.with_eta(store.for_owner(_owner(request)))
+    return {"items": [_public(i) for i in items], "retention_days": store.RETENTION_DAYS}
+
+
+@app.get("/api/items/{item_id}/thumb")
+def item_thumb(request: Request, item_id: str):
+    item = _item(request, item_id)
+    for name in ("thumb.jpg", "source_thumb.jpg"):
+        if store.path(item, name).exists():
+            return FileResponse(store.path(item, name), headers={"Cache-Control": "no-cache"})
+    raise HTTPException(404, "No picture yet.")
+
+
+def _download_name(item):
+    stem = re.sub(r"[^\w-]+", "-", (item.get("name") or item["kind"]).rsplit(".", 1)[0]).strip("-") or item["kind"]
+    return f"{stem}.png" if item["kind"] == "card" else f"{stem}-restored.png"
+
+
+@app.get("/api/items/{item_id}/file")
+def item_file(request: Request, item_id: str):
+    item = _item(request, item_id)
+    name = "result.png" if item["kind"] == "restore" else "card.png"
+    if item["state"] != "done" or not store.path(item, name).exists():
+        raise HTTPException(409, "Not ready yet.")
+    return FileResponse(store.path(item, name), media_type="image/png", filename=_download_name(item))
+
+
+@app.post("/api/items/{item_id}/cancel")
+async def cancel_item(request: Request, item_id: str):
+    _item(request, item_id)
+    await jobs.cancel(item_id)
+    return _public(store.load(item_id))
+
+
+@app.delete("/api/items/{item_id}")
+async def delete_item(request: Request, item_id: str):
+    _item(request, item_id)
+    await jobs.cancel(item_id)
+    store.delete(item_id)
+    return {"deleted": item_id}
+
+
+# ---- restore tab -----------------------------------------------------------
+
+def _restore_target(w, h):
+    """Restored size: the photo's shape and its own size, capped at RESTORE_MAX_SIDE
+    but never smaller than what the model produces."""
+    mw, mh = comfy.model_size(w, h)
+    long_side = max(max(mw, mh), min(max(w, h), RESTORE_MAX_SIDE))
+    s = long_side / max(w, h)
+    return [round(w * s), round(h * s)]
+
+
+@app.post("/api/restores")
+async def start_restore(request: Request, photo: UploadFile = File(...), allow_pause: bool = Form(False)):
+    if not comfy.enabled():
+        raise HTTPException(400, "AI restore is not set up on this server.")
+    im = await _read_upload(photo)
+    ask = await _pause_check(allow_pause)
+    if ask:
+        return ask
+    item = store.create(_owner(request), "restore", state="queued", name=photo.filename or "photo",
+                        target_size=_restore_target(*im.size), allow_pause=allow_pause, origin="upload")
+    await run_in_threadpool(store.put_image, item, "source.png", im)
+    await run_in_threadpool(_thumb_of_source, item, im)
+    jobs.submit(item)
+    return _public(item)
+
+
+# ---- portrait tab ----------------------------------------------------------
+
+def _get(photo_id):
+    if photo_id not in _photos:
+        raise HTTPException(404, "Photo expired, please upload it again.")
+    _photos.move_to_end(photo_id)
+    return _photos[photo_id]
+
+
+def _framing(zoom, dx, dy):
+    return [round(min(max(zoom, 0.5), 2.5), 3), dx, dy]
+
+
+def _session(im, name):
+    try:
+        face = card.find_face(im)
+    except card.NoFaceError as e:
+        raise HTTPException(422, str(e))
+    photo_id = uuid.uuid4().hex
+    _photos[photo_id] = {"photo": im, "face": face, "name": name}
+    while len(_photos) > MAX_PHOTOS:
+        _photos.popitem(last=False)
+    return {"id": photo_id, "name": name}
 
 
 @app.post("/api/photo")
 async def upload(photo: UploadFile = File(...)):
-    data = await photo.read()
-    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(413, f"Photo is over {MAX_UPLOAD_MB} MB.")
-
-    def prepare():
-        im = card.load_photo(data)
-        return im, card.find_face(im)
-
-    try:
-        im, face = await run_in_threadpool(prepare)
-    except card.NoFaceError as e:
-        raise HTTPException(422, str(e))
-    except Exception:
-        raise HTTPException(400, "Could not read that file as a photo.")
-    photo_id = uuid.uuid4().hex
-    _photos[photo_id] = {"photo": im, "face": face, "restored": None}
-    while len(_photos) > MAX_PHOTOS:
-        _photos.popitem(last=False)
-    return {"id": photo_id}
+    im = await _read_upload(photo)
+    return await run_in_threadpool(_session, im, photo.filename or "photo")
 
 
-def _render(photo_id, date, name, zoom, dx, dy, restored):
+@app.post("/api/photo/from-item")
+async def photo_from_item(request: Request, item: str = Form(...)):
+    it = _item(request, item)
+    if it["kind"] != "restore" or it["state"] != "done":
+        raise HTTPException(409, "That restore isn't finished.")
+    im = await run_in_threadpool(store.get_image, it, "result.png")
+    return await run_in_threadpool(_session, im, it.get("name") or "photo")
+
+
+def _render(request, photo_id, date, name, zoom, dx, dy, restored):
     entry = _get(photo_id)
     framing = _framing(zoom, dx, dy)
     if restored:
-        r = entry["restored"]
-        if not r or r[0] != framing:
+        it = _item(request, restored)
+        if it.get("photo_id") != photo_id or it.get("framing") != framing or it["state"] != "done":
             raise HTTPException(409, "The framing changed since the restore. Restore again.")
-        return card.to_png(card.finish(r[1], date, name))
-    return card.to_png(card.render(entry["photo"], entry["face"], date, name, *framing))
+        return card.finish(store.get_image(it, "result.png"), date, name)
+    return card.render(entry["photo"], entry["face"], date, name, *framing)
 
 
 @app.post("/api/card")
-async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
-                    restored: bool = Form(False)):
-    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy, restored)
-    return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+async def make_card(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
+                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
+    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
+    return Response(card.to_png(im), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
-async def _run_restore(job, entry, framing, pause):
-    t = card.TEMPLATE
-    size = comfy.model_size(t.width, t.height)
-    # the model's shape at card width; a few extra rows at the bottom get trimmed
-    card_size = (t.width, round(t.width * size[1] / size[0]))
-    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=card_size[1] - t.height)
-    # send the photo's own pixels; only shrink when there are more than needed
-    box_w, box_h = box[2] - box[0], box[3] - box[1]
-    send = size if box_w >= size[0] else (round(box_w), round(box_h))
-    picture = card.crop(entry["photo"], box, send)
-
-    def status(s):
-        job["state"] = s
-
-    lease = None
-    try:
-        if pause:
-            job["state"] = "pausing"
-            pausing = asyncio.ensure_future(gpu.pause())
-            try:
-                lease = await asyncio.shield(pausing)
-            except asyncio.CancelledError:  # cancelled mid-pause: still collect the lease to give it back
-                try:
-                    lease = await pausing
-                except gpu.PauseError:
-                    pass
-                raise
-            await gpu.wait_for_vram(comfy.vram_free)
-        result = await comfy.restore(picture, size, status)
-        entry["restored"] = (framing, result.resize(card_size, card.Image.LANCZOS))
-        job["state"] = "done"
-    except asyncio.CancelledError:
-        job["state"] = "cancelled"
-    except (comfy.ComfyError, gpu.PauseError) as e:
-        job.update(state="error", error=str(e))
-    except Exception as e:
-        job.update(state="error", error=f"Restore failed ({e.__class__.__name__}).")
-    finally:
-        if lease:  # hand the GPU back whatever happened
-            await comfy.free()
-            await gpu.resume(lease)
-    job["finished"] = time.monotonic()
-
-
-@app.post("/api/restore")
-async def start_restore(id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
-                        allow_pause: bool = Form(False)):
+@app.post("/api/portrait-restore")
+async def portrait_restore(request: Request, id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0),
+                           dy: int = Form(0), allow_pause: bool = Form(False)):
+    """Restore just the framed card area (best detail for a card)."""
     if not comfy.enabled():
         raise HTTPException(400, "AI restore is not set up on this server.")
     entry = _get(id)
     framing = _framing(zoom, dx, dy)
-    job_id = uuid.uuid4().hex
-    job = {"state": "queued", "started": time.monotonic()}
-    if entry["restored"] and entry["restored"][0] == framing:
-        job["state"] = "done"
-    else:
-        pause = False
-        free = await comfy.vram_free()
-        if free is not None and free < gpu.NEED_GB * 2**30:
-            await comfy.free()  # ComfyUI may just be holding models from an earlier job
-            await asyncio.sleep(2)
-            free = await comfy.vram_free() or free
-        if free is not None and free < gpu.NEED_GB * 2**30:
-            units = await gpu.active_units()
-            need, have = gpu.NEED_GB, round(free / 2**30, 1)
-            if not units:
-                raise HTTPException(409, f"Not enough free GPU memory ({have} GB free, about {need:g} GB needed).")
-            if not allow_pause:
-                return JSONResponse({"needs_pause": True, "units": units, "free_gb": have, "need_gb": need}, 409)
-            pause = True
-        job["task"] = asyncio.create_task(_run_restore(job, entry, framing, pause))
-    _jobs[job_id] = job
-    while len(_jobs) > 50:
-        _jobs.popitem(last=False)
-    return {"job": job_id}
-
-
-@app.post("/api/restore/{job_id}/cancel")
-async def cancel_restore(job_id: str):
-    job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "Unknown restore job.")
-    task = job.get("task")
-    if task and not task.done():
-        task.cancel()
-        try:
-            await task  # wait until ComfyUI has dropped it and the GPU is handed back
-        except asyncio.CancelledError:
-            pass
-    return {"state": job["state"]}
-
-
-@app.get("/api/restore/{job_id}")
-def restore_status(job_id: str):
-    job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "Unknown restore job.")
-    end = job.get("finished", time.monotonic())
-    return {"state": job["state"], "error": job.get("error"), "seconds": round(end - job["started"])}
+    ask = await _pause_check(allow_pause)
+    if ask:
+        return ask
+    t = card.TEMPLATE
+    size = comfy.model_size(t.width, t.height)
+    target = [t.width, round(t.width * size[1] / size[0])]  # a few extra rows, trimmed by the card
+    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=target[1] - t.height)
+    box_w, box_h = box[2] - box[0], box[3] - box[1]
+    send = tuple(target) if box_w >= target[0] else (round(box_w), round(box_h))  # never enlarge here
+    crop = await run_in_threadpool(card.crop, entry["photo"], box, send)
+    item = store.create(_owner(request), "restore", state="queued", name=entry["name"], target_size=target,
+                        allow_pause=allow_pause, origin="portrait", photo_id=id, framing=framing)
+    await run_in_threadpool(store.put_image, item, "source.png", crop)
+    await run_in_threadpool(_thumb_of_source, item, crop)
+    jobs.submit(item)
+    return _public(item)
 
 
 def _safe_stem(name):
@@ -213,13 +280,29 @@ def _safe_stem(name):
     return stem or "card"
 
 
+async def _keep_card(request, png, name):
+    item = store.create(_owner(request), "card", name=f"{_safe_stem(name)}.png")
+    store.put_bytes(item, "card.png", png)
+    await run_in_threadpool(store.put_thumb, item, card.Image.open(store.path(item, "card.png")))
+    return item
+
+
+@app.post("/api/cards")
+async def keep_card(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
+                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
+    """Render the card, add it to the history and return its download link."""
+    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
+    item = await _keep_card(request, card.to_png(im), name)
+    return {"item": item["id"], "download": f"api/items/{item['id']}/file"}
+
+
 @app.post("/api/save")
-async def save(id: str = Form(...), date: str = Form(""), name: str = Form(""),
-               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
-               restored: bool = Form(False)):
+async def save(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
+               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
     if SAVE_DIR is None:
         raise HTTPException(400, "Saving to a folder is not set up on this server.")
-    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy, restored)
+    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
+    png = card.to_png(im)
     stem = _safe_stem(name)
     out, n = SAVE_DIR / f"{stem}.png", 2
     while out.exists():  # never overwrite
@@ -228,4 +311,5 @@ async def save(id: str = Form(...), date: str = Form(""), name: str = Form(""),
         out.write_bytes(png)
     except OSError:
         raise HTTPException(500, f"Cannot write to the save folder ({SAVE_DIR}). Check it exists and is writable by user 1000.")
+    await _keep_card(request, png, name)
     return {"saved": out.name}

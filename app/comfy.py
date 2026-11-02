@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 import httpx
+import websockets
 from PIL import Image
 
 URL = (os.environ.get("COMFYUI_URL") or "").rstrip("/")
@@ -24,7 +25,8 @@ TIMEOUT = float(os.environ.get("COMFYUI_TIMEOUT", "900"))
 # Resize nodes that pick their own output size; replaced with an exact resize
 AUTO_RESIZE = {"FluxKontextImageScale", "ImageScaleToTotalPixels", "ImageScaleToMaxDimension"}
 OUTPUT_NODES = {"SaveImage", "SaveImageAdvanced", "PreviewImage"}
-SAMPLERS = {"KSampler", "KSamplerAdvanced", "RandomNoise"}
+SAMPLERS = {"KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"}
+SEEDS = SAMPLERS | {"RandomNoise"}
 MULTIPLE = 16  # the model works in 16-pixel steps
 MEGAPIXELS = float(os.environ.get("COMFYUI_MEGAPIXELS", "1.0"))
 
@@ -67,21 +69,27 @@ def _prepare(image_name, size):
             node["class_type"] = "ImageScale"
             node["inputs"] = {"image": src, "upscale_method": "lanczos",
                               "width": size[0], "height": size[1], "crop": "disabled"}
-        elif node["class_type"] in SAMPLERS:
+        elif node["class_type"] in SEEDS:
             key = "noise_seed" if "noise_seed" in node["inputs"] else "seed"
             if not isinstance(node["inputs"].get(key), list):
                 node["inputs"][key] = random.randrange(2**50)
     outputs = [k for k, n in wf.items() if n["class_type"] in OUTPUT_NODES]
     if not outputs:
         raise ComfyError("The workflow has no Save Image node.")
-    return wf, outputs
+    samplers = {k for k, n in wf.items() if n["class_type"] in SAMPLERS}
+    return wf, outputs, samplers
 
 
-async def restore(picture: Image.Image, size, on_status=lambda s: None) -> Image.Image:
-    """Send picture through the workflow; return the result at exactly `size`."""
+async def restore(picture: Image.Image, size, on_progress=lambda p: None) -> Image.Image:
+    """Send picture through the workflow; return the result at exactly `size`.
+
+    on_progress gets {"phase": queued|loading|steps|finishing, "step", "steps"}.
+    """
     buf = io.BytesIO()
     picture.save(buf, "PNG")
     name = f"portrait_{uuid.uuid4().hex[:12]}.png"
+    client_id = uuid.uuid4().hex
+    progress = {"phase": "queued", "step": 0, "steps": 0}
     async with httpx.AsyncClient(base_url=URL, timeout=60) as http:
         try:
             r = await http.post("/upload/image", files={"image": (name, buf.getvalue(), "image/png")},
@@ -89,19 +97,48 @@ async def restore(picture: Image.Image, size, on_status=lambda s: None) -> Image
             r.raise_for_status()
             uploaded = r.json()
             image_ref = f"{uploaded['subfolder']}/{uploaded['name']}" if uploaded.get("subfolder") else uploaded["name"]
-            wf, outputs = _prepare(image_ref, size)
-            r = await http.post("/prompt", json={"prompt": wf, "client_id": "portrait"})
+            wf, outputs, samplers = _prepare(image_ref, size)
+            listener = asyncio.create_task(_listen(client_id, samplers, progress, on_progress))
+            r = await http.post("/prompt", json={"prompt": wf, "client_id": client_id})
         except httpx.HTTPError as e:
             raise ComfyError(f"Cannot reach ComfyUI ({e.__class__.__name__}).")
-        if r.status_code != 200:
-            detail = r.json().get("error", {}).get("message", r.text[:200]) if r.headers.get("content-type", "").startswith("application/json") else r.text[:200]
-            raise ComfyError(f"ComfyUI rejected the workflow: {detail}")
-        prompt_id = r.json()["prompt_id"]
         try:
-            return await _wait(http, prompt_id, outputs, size, on_status)
-        except (asyncio.CancelledError, ComfyError):
-            await _cancel(http, prompt_id)
-            raise
+            if r.status_code != 200:
+                detail = r.json().get("error", {}).get("message", r.text[:200]) if r.headers.get("content-type", "").startswith("application/json") else r.text[:200]
+                raise ComfyError(f"ComfyUI rejected the workflow: {detail}")
+            prompt_id = r.json()["prompt_id"]
+            try:
+                return await _wait(http, prompt_id, outputs, size, progress, on_progress)
+            except (asyncio.CancelledError, ComfyError):
+                await _cancel(http, prompt_id)
+                raise
+        finally:
+            listener.cancel()
+
+
+async def _listen(client_id, samplers, progress, on_progress):
+    """Follow ComfyUI's live events for the sampler's step counter (best effort)."""
+    ws_url = URL.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + f"/ws?clientId={client_id}"
+    try:
+        async with websockets.connect(ws_url, max_size=None) as ws:
+            async for raw in ws:
+                if not isinstance(raw, str):
+                    continue  # preview images
+                msg = json.loads(raw)
+                data = msg.get("data") or {}
+                if msg.get("type") == "execution_start":
+                    progress.update(phase="loading")
+                elif msg.get("type") == "progress" and (not samplers or str(data.get("node")) in samplers
+                                                        or str(data.get("node", "")).split(":")[-1] in
+                                                        {s.split(":")[-1] for s in samplers}):
+                    value, steps = data.get("value", 0), data.get("max", 0)
+                    progress.update(phase="finishing" if steps and value >= steps else "steps",
+                                    step=value, steps=steps)
+                else:
+                    continue
+                on_progress(dict(progress))
+    except (OSError, websockets.WebSocketException, ValueError):
+        pass
 
 
 async def _cancel(http, prompt_id):
@@ -115,7 +152,7 @@ async def _cancel(http, prompt_id):
         pass
 
 
-async def _wait(http, prompt_id, outputs, size, on_status):
+async def _wait(http, prompt_id, outputs, size, progress, on_progress):
     start = time.monotonic()
     while time.monotonic() - start < TIMEOUT:
         await asyncio.sleep(2)
@@ -123,7 +160,9 @@ async def _wait(http, prompt_id, outputs, size, on_status):
         if not hist:
             q = (await http.get("/queue")).json()
             running = any(item[1] == prompt_id for item in q.get("queue_running", []))
-            on_status("running" if running else "queued")
+            if running and progress["phase"] == "queued":
+                progress["phase"] = "loading"
+            on_progress(dict(progress))
             continue
         status = hist.get("status", {})
         if status.get("status_str") == "error":

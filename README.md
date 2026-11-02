@@ -43,11 +43,23 @@ docker compose pull && docker compose up -d
 
 ## Using it
 
-1. Pick a photo.
+**Restore tab:** drop or pick photos. Each is restored by AI in the background (a few
+minutes each, one at a time) with a progress bar and time left. Leave the page and come
+back; the queue keeps running. Finished photos can be downloaded or opened with
+**Create Portrait**.
+
+**Portrait tab:**
+
+1. Pick a photo (or come from **Create Portrait**).
 2. Type the date (pre-filled with today) and name.
 3. Check the preview. Use **Zoom** and the arrows if the framing is off, ⟲ to reset.
-4. Optional: **Restore with AI**, then compare with the **Original / Restored** switch.
+4. Optional: **Restore with AI** restores just the card area (the most detail for a
+   card), then compare with the **Original / Restored** switch.
 5. **Download** or **Save to folder**.
+
+**History:** restores and cards made in this browser, with Download, Create Portrait and
+Delete. Each browser only sees its own (a random id in a cookie). Items are deleted after
+`RETENTION_DAYS` (default 7). Mount `/data` to keep them across container updates.
 
 ## How the framing works
 
@@ -62,6 +74,8 @@ top. These numbers were measured from a hand-made card and live in the template
 | Variable | Default | Meaning |
 |---|---|---|
 | `SAVE_DIR` | unset | Folder inside the container for **Save to folder** |
+| `DATA_DIR` | `/data` | History and restore queue; mount it to keep them across updates |
+| `RETENTION_DAYS` | `7` | History items are deleted after this many days |
 | `TEMPLATE_DIR` | built-in | Folder with your own `template.json` (see below) |
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |

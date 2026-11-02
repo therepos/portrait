@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-RUN useradd --create-home --uid 1000 app
+RUN useradd --create-home --uid 1000 app && mkdir /data && chown app /data
+ENV DATA_DIR=/data
 USER app
 
 EXPOSE 8000

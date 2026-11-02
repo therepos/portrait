@@ -7,21 +7,27 @@
 <style>
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
-    --line: #dddcd6; --accent: #1d1d1b; --accent-text: #ffffff; --error: #b3261e;
+    --line: #dddcd6; --accent: #1d1d1b; --accent-text: #ffffff; --error: #b3261e; --bar: #3b6fd8;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #161615; --panel: #222220; --text: #ececea; --muted: #a2a29c;
-      --line: #3a3a37; --accent: #ececea; --accent-text: #161615; --error: #f2b8b5;
+      --line: #3a3a37; --accent: #ececea; --accent-text: #161615; --error: #f2b8b5; --bar: #7da2f0;
     }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+                 font-weight: 600; padding: 10px 14px; color: var(--muted); }
+  .tabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--text); }
+  main { display: grid; gap: 16px; }
   @media (min-width: 760px) { main { grid-template-columns: 340px 1fr; align-items: start; } }
   h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
            display: grid; gap: 14px; }
   label { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
@@ -29,12 +35,13 @@
                      border-radius: 8px; padding: 10px 12px; width: 100%; }
   input[type=file] { font: inherit; color: var(--text); }
   input[type=range] { width: 100%; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button, .btn { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text);
                  border-radius: 8px; padding: 10px 14px; cursor: pointer; text-decoration: none;
                  display: inline-flex; align-items: center; justify-content: center; }
   button.primary, .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   button:disabled, .btn.disabled { opacity: .45; pointer-events: none; }
+  .small { padding: 6px 10px; font-size: 14px; }
   .nudge { display: grid; grid-template-columns: repeat(3, 48px); gap: 6px; justify-content: start; }
   .nudge button { padding: 8px 0; }
   .preview { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
@@ -43,73 +50,114 @@
                  box-shadow: 0 1px 8px rgba(0,0,0,.15); }
   @media (max-width: 759px) {
     /* keep the card in view while adjusting it */
-    .preview { order: -1; position: sticky; top: 0; z-index: 1; min-height: 0; border-radius: 0 0 12px 12px; }
-    .preview img { max-height: 42vh; }
+    #portraitTab .preview { order: -1; position: sticky; top: 0; z-index: 1; min-height: 0; border-radius: 0 0 12px 12px; }
+    #portraitTab .preview img { max-height: 42vh; }
     .placeholder { padding: 16px 12px; }
   }
   .placeholder { color: var(--muted); text-align: center; padding: 40px 12px; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center;
+          color: var(--muted); cursor: pointer; display: block; }
+  .drop.over { border-color: var(--text); color: var(--text); }
   .restore { display: grid; gap: 8px; }
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: max-content; }
   .seg button { border: 0; border-radius: 0; }
   .seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-text); }
+  .status { font-size: 14px; color: var(--muted); min-height: 1.4em; margin: 0; }
+  .status.error { color: var(--error); }
+  .muted { color: var(--muted); font-size: 13px; margin: 0; }
+  .history { display: grid; gap: 10px; }
+  .item { display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: start;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+  .item img { width: 72px; height: 92px; object-fit: cover; border-radius: 6px; background: var(--bg); }
+  .item .meta { display: grid; gap: 6px; min-width: 0; }
+  .item .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--bar); transition: width .5s; }
   dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
            max-width: min(420px, calc(100vw - 32px)); padding: 20px; }
   dialog::backdrop { background: rgba(0,0,0,.45); }
   dialog p { margin: 0 0 14px; }
   .check { display: flex; gap: 8px; align-items: center; color: var(--text); margin-bottom: 16px; }
-  #status { font-size: 14px; color: var(--muted); min-height: 1.4em; margin: 0; }
-  #status.error { color: var(--error); }
-  .muted { color: var(--muted); font-size: 13px; margin: 0; }
 </style>
 </head>
 <body>
-<main>
-  <section class="panel">
+<div class="wrap">
+  <nav class="tabs" role="tablist">
+    <button id="tabRestore" role="tab" aria-selected="true">Restore</button>
+    <button id="tabPortrait" role="tab" aria-selected="false">Portrait</button>
+  </nav>
+
+  <section id="restoreTab" class="panel">
     <div>
-      <h1>Portrait card</h1>
-      <p class="muted">Pick a photo, type the caption, then download or save.</p>
+      <h1>Restore photos</h1>
+      <p class="muted">Sharpens blurry or small photos with AI. Each one takes a few minutes; you can leave this page and come back.</p>
     </div>
-    <label>Photo
-      <input id="photo" type="file" accept="image/*">
+    <p id="restoreOff" class="muted" hidden>AI restore is not set up on this server.</p>
+    <label id="drop" class="drop">Tap to choose photos, or drop them here
+      <input id="restoreFiles" type="file" accept="image/*" multiple hidden>
     </label>
-    <label>Date
-      <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
-    </label>
-    <label>Name
-      <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
-    </label>
-    <label>Zoom <span id="zoomVal">100%</span>
-      <input id="zoom" type="range" min="0.6" max="1.8" step="0.02" value="1">
-    </label>
-    <div>
-      <p class="muted" style="margin-bottom:6px">Move photo</p>
-      <div class="nudge">
-        <span></span><button data-dy="-25" aria-label="Up">↑</button><span></span>
-        <button data-dx="-25" aria-label="Left">←</button>
-        <button id="reset" aria-label="Reset framing">⟲</button>
-        <button data-dx="25" aria-label="Right">→</button>
-        <span></span><button data-dy="25" aria-label="Down">↓</button><span></span>
-      </div>
-    </div>
-    <div id="restoreBox" class="restore" hidden>
-      <button id="restore">Restore with AI</button>
-      <div id="viewToggle" class="seg" hidden>
-        <button id="showOriginal" aria-pressed="false">Original</button>
-        <button id="showRestored" aria-pressed="true">Restored</button>
-      </div>
-      <p class="muted">Sharpens the photo with ComfyUI. Takes a while; set the framing first, it is locked while restoring.</p>
-    </div>
-    <div class="row">
-      <a id="download" class="btn primary disabled" download="card.png">Download</a>
-      <button id="save" hidden disabled>Save to folder</button>
-    </div>
-    <p id="status" role="status"></p>
+    <p id="restoreStatus" class="status" role="status"></p>
   </section>
-  <section class="preview">
-    <div id="placeholder" class="placeholder">Your card appears here.</div>
-    <img id="card" alt="Card preview" hidden>
+
+  <main id="portraitTab" hidden>
+    <section class="panel">
+      <div>
+        <h1>Portrait card</h1>
+        <p class="muted">Pick a photo, type the caption, then download or save.</p>
+      </div>
+      <label>Photo
+        <input id="photo" type="file" accept="image/*">
+      </label>
+      <label>Date
+        <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
+      </label>
+      <label>Name
+        <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
+      </label>
+      <label>Zoom <span id="zoomVal">100%</span>
+        <input id="zoom" type="range" min="0.6" max="1.8" step="0.02" value="1">
+      </label>
+      <div>
+        <p class="muted" style="margin-bottom:6px">Move photo</p>
+        <div class="nudge">
+          <span></span><button data-dy="-25" aria-label="Up">↑</button><span></span>
+          <button data-dx="-25" aria-label="Left">←</button>
+          <button id="reset" aria-label="Reset framing">⟲</button>
+          <button data-dx="25" aria-label="Right">→</button>
+          <span></span><button data-dy="25" aria-label="Down">↓</button><span></span>
+        </div>
+      </div>
+      <div id="restoreBox" class="restore" hidden>
+        <button id="restore">Restore with AI</button>
+        <div id="restoreBar" class="bar" hidden><div></div></div>
+        <div id="viewToggle" class="seg" hidden>
+          <button id="showOriginal" aria-pressed="false">Original</button>
+          <button id="showRestored" aria-pressed="true">Restored</button>
+        </div>
+        <p class="muted">Restores just the card area, for the most detail. Set the framing first; it is locked while restoring.</p>
+      </div>
+      <div class="row">
+        <button id="download" class="primary" disabled>Download</button>
+        <button id="save" hidden disabled>Save to folder</button>
+      </div>
+      <p id="status" class="status" role="status"></p>
+    </section>
+    <section class="preview">
+      <div id="placeholder" class="placeholder">Your card appears here.</div>
+      <img id="card" alt="Card preview" hidden>
+    </section>
+  </main>
+
+  <section class="history" aria-label="History">
+    <div class="row" style="justify-content:space-between">
+      <h2>History</h2>
+      <span id="retention" class="muted"></span>
+    </div>
+    <div id="historyList" class="history"></div>
+    <p id="historyEmpty" class="muted">Restored photos and cards you make in this browser appear here.</p>
   </section>
-</main>
+</div>
+
 <dialog id="pauseDialog">
   <form method="dialog">
     <p id="pauseText"></p>
@@ -120,52 +168,236 @@
     </div>
   </form>
 </dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { id: null, dx: 0, dy: 0, url: null, restored: false, showRestored: true, canRestore: false };
-let timer = null, seq = 0, restoring = null;
+const config = { can_save: false, can_restore: false };
+const state = { id: null, dx: 0, dy: 0, url: null, restoredItem: null, showRestored: true, portraitJob: null };
+const FINAL = ["done", "error", "cancelled"];
+let timer = null, seq = 0, items = [];
 
-const d = new Date();
-$("date").value = d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" });
-
-function status(msg, isError = false) {
-  $("status").textContent = msg;
-  $("status").className = isError ? "error" : "";
+// ---- tabs ----
+function showTab(name) {
+  $("tabRestore").setAttribute("aria-selected", String(name === "restore"));
+  $("tabPortrait").setAttribute("aria-selected", String(name === "portrait"));
+  $("restoreTab").hidden = name !== "restore";
+  $("portraitTab").hidden = name !== "portrait";
+  try { localStorage.setItem("portrait.tab", name); } catch {}
 }
+$("tabRestore").addEventListener("click", () => showTab("restore"));
+$("tabPortrait").addEventListener("click", () => showTab("portrait"));
 
-function form(withCaption = true) {
-  const f = new FormData();
-  f.append("id", state.id);
-  if (withCaption) {
-    f.append("date", $("date").value);
-    f.append("name", $("name").value);
-    f.append("restored", state.restored && state.showRestored ? "true" : "false");
-  }
-  f.append("zoom", $("zoom").value);
-  f.append("dx", state.dx);
-  f.append("dy", state.dy);
-  return f;
-}
-
+// ---- helpers ----
+function setStatus(el, msg, isError = false) { el.textContent = msg; el.className = "status" + (isError ? " error" : ""); }
+const status = (msg, err) => setStatus($("status"), msg, err);
 async function errorText(res) {
   try { return (await res.json()).detail || res.statusText; } catch { return res.statusText; }
 }
+function minutes(sec) {
+  if (sec == null) return "";
+  if (sec < 60) return "under a minute";
+  return "about " + Math.round(sec / 60) + " min";
+}
+
+// ---- asking before pausing another program on the GPU ----
+function storedAllow() {
+  try { return localStorage.getItem("portrait.alwaysPause") === "1"; } catch { return false; }
+}
+function askToPause(info) {
+  $("pauseText").textContent = info.units.join(", ") + " is using the graphics card (" + info.free_gb +
+    " GB free, about " + info.need_gb + " GB needed). Pause it while restoring? It starts again automatically afterwards.";
+  $("alwaysPause").checked = false;
+  $("pauseDialog").returnValue = "";
+  $("pauseDialog").showModal();
+  return new Promise((done) => $("pauseDialog").addEventListener("close", () => {
+    const ok = $("pauseDialog").returnValue === "ok";
+    if (ok && $("alwaysPause").checked) { try { localStorage.setItem("portrait.alwaysPause", "1"); } catch {} }
+    done(ok);
+  }, { once: true }));
+}
+// POST a restore request, asking first if the GPU must be freed. Returns the item, or null.
+async function requestRestore(url, makeForm, statusFn) {
+  let allow = storedAllow();
+  for (;;) {
+    const f = makeForm();
+    f.append("allow_pause", allow ? "true" : "false");
+    const res = await fetch(url, { method: "POST", body: f });
+    if (res.status === 409) {
+      const info = await res.json();
+      if (info.needs_pause && !allow) {
+        if (!(await askToPause(info))) { statusFn("Restore cancelled."); return null; }
+        allow = true;
+        continue;
+      }
+      statusFn(info.detail || "Cannot restore right now.", true);
+      return null;
+    }
+    if (!res.ok) { statusFn(await errorText(res), true); return null; }
+    return res.json();
+  }
+}
+
+// ---- restore tab ----
+async function restoreFiles(files) {
+  const list = [...files].filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+  if (!list.length) return;
+  const st = (m, e) => setStatus($("restoreStatus"), m, e);
+  let added = 0;
+  for (const file of list) {
+    st("Uploading " + file.name + "…");
+    const item = await requestRestore("api/restores", () => { const f = new FormData(); f.append("photo", file); return f; }, st);
+    if (!item) return refresh();
+    added++;
+    await refresh();
+  }
+  st(added === 1 ? "Added to the queue below." : added + " photos added to the queue below.");
+}
+$("restoreFiles").addEventListener("change", () => { restoreFiles($("restoreFiles").files); $("restoreFiles").value = ""; });
+["dragenter", "dragover"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", (e) => restoreFiles(e.dataTransfer.files));
+
+// ---- history ----
+const phaseWords = { queued: "Waiting in queue", pausing: "Freeing the graphics card", loading: "Loading the AI model",
+                     steps: "Restoring", finishing: "Finishing" };
+function describe(it) {
+  if (it.state === "done") return it.kind === "card" ? "Portrait card" :
+    "Restored" + (it.seconds ? " in " + minutes(it.seconds).replace("about ", "") : "");
+  if (it.state === "error") return it.error || "Failed";
+  if (it.state === "cancelled") return "Cancelled";
+  const p = it.progress || {};
+  const phase = it.state === "running" ? (p.phase === "queued" ? "loading" : p.phase || "loading") : it.state;
+  let s = phaseWords[phase] || phase;
+  if (phase === "steps" && p.steps) s += " " + p.step + "/" + p.steps;
+  if (it.eta_seconds != null) s += " · " + minutes(it.eta_seconds) + " left";
+  return s;
+}
+function percent(it) {
+  const p = it.progress || {};
+  if (it.state === "running" && p.phase === "steps" && p.steps) return 15 + 80 * p.step / p.steps;
+  if (it.state === "running" && p.phase === "finishing") return 97;
+  if (it.state === "running") return 8;
+  if (it.state === "pausing") return 4;
+  return 0;
+}
+function renderHistory() {
+  const box = $("historyList");
+  $("historyEmpty").hidden = items.length > 0;
+  const keep = new Set(items.map((i) => i.id));
+  [...box.children].forEach((el) => { if (!keep.has(el.dataset.id)) el.remove(); });
+  items.forEach((it, idx) => {
+    let el = box.querySelector('[data-id="' + it.id + '"]');
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "item"; el.dataset.id = it.id;
+      el.innerHTML = '<img alt=""><div class="meta"><div class="title"></div><div class="desc status"></div>' +
+        '<div class="bar" hidden><div></div></div><div class="row actions"></div></div>';
+    }
+    if (box.children[idx] !== el) box.insertBefore(el, box.children[idx] || null);
+    const img = el.querySelector("img");
+    const thumbKey = it.state === "done" ? "done" : "src";
+    if (img.dataset.key !== thumbKey) { img.dataset.key = thumbKey; img.src = "api/items/" + it.id + "/thumb?" + thumbKey; }
+    el.querySelector(".title").textContent = (it.kind === "card" ? "Card · " : "") + (it.name || "photo");
+    const desc = el.querySelector(".desc");
+    desc.textContent = describe(it);
+    desc.className = "desc status" + (it.state === "error" ? " error" : "");
+    const active = !FINAL.includes(it.state);
+    el.querySelector(".bar").hidden = !active;
+    el.querySelector(".bar > div").style.width = percent(it) + "%";
+    const actions = el.querySelector(".actions");
+    if (actions.dataset.state !== it.state) {
+      actions.dataset.state = it.state;
+      actions.innerHTML = "";
+      const add = (label, fn, primary) => {
+        const b = document.createElement("button");
+        b.className = "small" + (primary ? " primary" : ""); b.textContent = label;
+        b.addEventListener("click", fn); actions.append(b);
+      };
+      if (it.state === "done") {
+        add("Download", () => { location.href = "api/items/" + it.id + "/file"; }, true);
+        if (it.kind === "restore") add("Create Portrait", () => createPortrait(it.id));
+      }
+      if (active) add("Cancel", async () => { await fetch("api/items/" + it.id + "/cancel", { method: "POST" }); refresh(); });
+      else add("Delete", async () => {
+        if (!confirm("Delete this from the history?")) return;
+        await fetch("api/items/" + it.id, { method: "DELETE" }); refresh();
+      });
+    }
+  });
+}
+async function refresh() {
+  try {
+    const res = await fetch("api/items");
+    if (!res.ok) return;
+    const data = await res.json();
+    items = data.items;
+    $("retention").textContent = "Kept for " + data.retention_days + " days";
+    renderHistory();
+    trackPortraitJob();
+  } catch {}
+}
+function poll() {
+  const busy = items.some((i) => !FINAL.includes(i.state));
+  setTimeout(async () => { await refresh(); poll(); }, busy ? 2000 : 15000);
+}
+
+async function createPortrait(itemId) {
+  showTab("portrait");
+  window.scrollTo({ top: 0 });
+  status("Opening the restored photo…");
+  const f = new FormData(); f.append("item", itemId);
+  const res = await fetch("api/photo/from-item", { method: "POST", body: f });
+  if (!res.ok) return status(await errorText(res), true);
+  startSession((await res.json()).id);
+}
+
+// ---- portrait tab ----
+const d = new Date();
+$("date").value = d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" });
+
+function form() {
+  const f = new FormData();
+  f.append("id", state.id);
+  f.append("date", $("date").value);
+  f.append("name", $("name").value);
+  f.append("zoom", $("zoom").value);
+  f.append("dx", state.dx);
+  f.append("dy", state.dy);
+  if (state.restoredItem && state.showRestored) f.append("restored", state.restoredItem);
+  return f;
+}
 
 function updateRestoreUi() {
-  $("restoreBox").hidden = !state.canRestore || !state.id;
-  $("viewToggle").hidden = !state.restored;
-  $("restore").hidden = state.restored;
-  $("restore").textContent = restoring ? "Cancel restore" : "Restore with AI";
-  // the restore is for the current framing, so framing is locked while it runs
-  document.querySelectorAll("#zoom, #photo, .nudge button").forEach((el) => { el.disabled = !!restoring; });
+  const job = state.portraitJob;
+  $("restoreBox").hidden = !config.can_restore || !state.id;
+  $("viewToggle").hidden = !state.restoredItem;
+  $("restore").hidden = !!state.restoredItem;
+  $("restore").textContent = job ? "Cancel restore" : "Restore with AI";
+  $("restoreBar").hidden = !job;
+  document.querySelectorAll("#zoom, #photo, .nudge button").forEach((el) => { el.disabled = !!job; });
   $("showOriginal").setAttribute("aria-pressed", String(!state.showRestored));
   $("showRestored").setAttribute("aria-pressed", String(state.showRestored));
+}
+
+function trackPortraitJob() {
+  const id = state.portraitJob;
+  if (!id) return;
+  const it = items.find((i) => i.id === id);
+  if (!it) { state.portraitJob = null; updateRestoreUi(); return; }
+  $("restoreBar").firstElementChild.style.width = percent(it) + "%";
+  if (it.state === "done") {
+    state.portraitJob = null; state.restoredItem = id; state.showRestored = true;
+    updateRestoreUi(); render().then(() => status("Restored."));
+  } else if (it.state === "error" || it.state === "cancelled") {
+    state.portraitJob = null; updateRestoreUi(); status(describe(it), it.state === "error");
+  } else {
+    status(describe(it));
+  }
 }
 
 async function render() {
   if (!state.id) return;
   const mine = ++seq;
-  if (!restoring) status("Updating…");
   const res = await fetch("api/card", { method: "POST", body: form() });
   if (mine !== seq) return;  // a newer render is on its way
   if (!res.ok) {
@@ -178,20 +410,19 @@ async function render() {
   $("card").src = state.url;
   $("card").hidden = false;
   $("placeholder").hidden = true;
-  const stem = ($("name").value.trim().split(/\s+/)[0] || "card").toLowerCase();
-  $("download").href = state.url;
-  $("download").download = stem + ".png";
-  $("download").classList.remove("disabled");
+  $("download").disabled = false;
   $("save").disabled = false;
-  if (!restoring) status("");
 }
-
 function later() { clearTimeout(timer); timer = setTimeout(render, 250); }
 
+function startSession(id) {
+  state.id = id; state.dx = 0; state.dy = 0; state.restoredItem = null; state.portraitJob = null;
+  $("zoom").value = 1; $("zoomVal").textContent = "100%";
+  updateRestoreUi(); status(""); render();
+}
+
 function framingChanged() {
-  // a restore only fits the framing it was made for
-  restoring = null;
-  state.restored = false;
+  state.restoredItem = null;  // a restore only fits the framing it was made for
   updateRestoreUi();
   later();
 }
@@ -199,16 +430,12 @@ function framingChanged() {
 $("photo").addEventListener("change", async () => {
   const file = $("photo").files[0];
   if (!file) return;
-  state.id = null; state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%";
-  restoring = null; state.restored = false; updateRestoreUi();
-  $("download").classList.add("disabled"); $("save").disabled = true;
+  $("download").disabled = true; $("save").disabled = true;
   status("Finding the face…");
   const f = new FormData(); f.append("photo", file);
   const res = await fetch("api/photo", { method: "POST", body: f });
   if (!res.ok) return status(await errorText(res), true);
-  state.id = (await res.json()).id;
-  updateRestoreUi();
-  render();
+  startSession((await res.json()).id);
 });
 
 ["date", "name"].forEach((id) => $(id).addEventListener("input", later));
@@ -226,88 +453,56 @@ $("reset").addEventListener("click", () => {
   state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%"; framingChanged();
 });
 
-function storedAllow() {
-  try { return localStorage.getItem("portrait.alwaysPause") === "1"; } catch { return false; }
-}
-
-function askToPause(info) {
-  $("pauseText").textContent = info.units.join(", ") + " is using the graphics card (" + info.free_gb +
-    " GB free, about " + info.need_gb + " GB needed). Pause it during this restore? It starts again automatically afterwards.";
-  $("alwaysPause").checked = false;
-  $("pauseDialog").returnValue = "";
-  $("pauseDialog").showModal();
-  return new Promise((done) => $("pauseDialog").addEventListener("close", () => {
-    const ok = $("pauseDialog").returnValue === "ok";
-    if (ok && $("alwaysPause").checked) { try { localStorage.setItem("portrait.alwaysPause", "1"); } catch {} }
-    done(ok);
-  }, { once: true }));
-}
-
-async function startRestore(allowPause) {
-  const f = form(false);
-  f.append("allow_pause", allowPause ? "true" : "false");
-  const res = await fetch("api/restore", { method: "POST", body: f });
-  if (res.status === 409) {
-    const info = await res.json();
-    if (info.needs_pause) {
-      if (!(await askToPause(info))) { status("Restore cancelled."); return null; }
-      return startRestore(true);
-    }
-    status(info.detail || "Not enough free GPU memory.", true);
-    return null;
-  }
-  if (!res.ok) { status(await errorText(res), true); return null; }
-  return (await res.json()).job;
-}
-
 $("restore").addEventListener("click", async () => {
-  if (restoring) {
-    const job = restoring;
+  if (state.portraitJob) {
     $("restore").disabled = true;
-    status("Cancelling…");
-    await fetch("api/restore/" + job + "/cancel", { method: "POST" });
-    restoring = null; $("restore").disabled = false; updateRestoreUi();
-    return status("Restore cancelled.");
+    await fetch("api/items/" + state.portraitJob + "/cancel", { method: "POST" });
+    $("restore").disabled = false;
+    return refresh();
   }
   $("restore").disabled = true;
-  const job = await startRestore(storedAllow());
+  const item = await requestRestore("api/portrait-restore", () => {
+    const f = form(); f.delete("restored"); f.delete("date"); f.delete("name"); return f;
+  }, status);
   $("restore").disabled = false;
-  if (!job) return;
-  restoring = job; updateRestoreUi();
-  const words = { pausing: "Freeing the graphics card", queued: "Waiting for ComfyUI", running: "Restoring" };
-  while (restoring === job) {
-    const r = await fetch("api/restore/" + job);
-    if (restoring !== job) return;  // framing changed meanwhile
-    if (!r.ok) { restoring = null; updateRestoreUi(); return status(await errorText(r), true); }
-    const s = await r.json();
-    if (s.state === "done") {
-      restoring = null; state.restored = true; state.showRestored = true;
-      updateRestoreUi();
-      await render();
-      return status("Restored in " + s.seconds + " s.");
-    }
-    if (s.state === "error") { restoring = null; updateRestoreUi(); return status(s.error, true); }
-    if (s.state === "cancelled") { restoring = null; updateRestoreUi(); return status("Restore cancelled."); }
-    status((words[s.state] || s.state) + "… " + s.seconds + " s");
-    await new Promise((ok) => setTimeout(ok, 2000));
-  }
+  if (!item) return;
+  state.portraitJob = item.id;
+  updateRestoreUi();
+  status("Added to the queue. You can follow it in History too.");
+  refresh();
 });
 $("showOriginal").addEventListener("click", () => { state.showRestored = false; updateRestoreUi(); render(); });
 $("showRestored").addEventListener("click", () => { state.showRestored = true; updateRestoreUi(); render(); });
 
+$("download").addEventListener("click", async () => {
+  $("download").disabled = true;
+  const res = await fetch("api/cards", { method: "POST", body: form() });
+  $("download").disabled = false;
+  if (!res.ok) return status(await errorText(res), true);
+  location.href = (await res.json()).download;
+  refresh();
+});
 $("save").addEventListener("click", async () => {
   $("save").disabled = true;
   const res = await fetch("api/save", { method: "POST", body: form() });
   $("save").disabled = false;
   if (!res.ok) return status(await errorText(res), true);
   status("Saved as " + (await res.json()).saved);
+  refresh();
 });
 
+// ---- start ----
 fetch("api/config").then((r) => r.json()).then((c) => {
+  Object.assign(config, c);
   $("save").hidden = !c.can_save;
-  state.canRestore = c.can_restore;
+  $("restoreOff").hidden = c.can_restore;
+  $("drop").hidden = !c.can_restore;
   updateRestoreUi();
 });
+let startTab = "restore";
+try { startTab = localStorage.getItem("portrait.tab") || "restore"; } catch {}
+showTab(startTab);
+refresh().then(poll);
 </script>
 </body>
 </html>

@@ -11,6 +11,7 @@ services:
       SAVE_DIR: /output
     volumes:
       - ./output:/output
+      - ./data:/data          # history and restore queue
 
 # Optional: pause a GPU-hungry host service (e.g. a local LLM) during AI restore.
 # See "Freeing the GPU from another service" in the README.
