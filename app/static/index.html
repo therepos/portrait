@@ -20,7 +20,7 @@
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); align-items: center; }
   .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
                  font-weight: 600; padding: 10px 14px; color: var(--muted); }
   .tabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--text); }
@@ -85,6 +85,8 @@
   <nav class="tabs" role="tablist">
     <button id="tabRestore" role="tab" aria-selected="true">Restore</button>
     <button id="tabPortrait" role="tab" aria-selected="false">Portrait</button>
+    <span style="flex:1"></span>
+    <button id="signOut" class="small" hidden>Sign out</button>
   </nav>
 
   <section id="restoreTab" class="panel">
@@ -170,6 +172,13 @@
 </dialog>
 
 <script>
+// a lapsed sign-in sends any API call back to the sign-in page
+const _fetch = window.fetch;
+window.fetch = async (...args) => {
+  const res = await _fetch(...args);
+  if (res.status === 401 && String(args[0]).startsWith("api/") && args[0] !== "api/login") location.href = "login";
+  return res;
+};
 const $ = (id) => document.getElementById(id);
 const config = { can_save: false, can_restore: false };
 const state = { id: null, dx: 0, dy: 0, url: null, restoredItem: null, showRestored: true, portraitJob: null };
@@ -497,7 +506,13 @@ fetch("api/config").then((r) => r.json()).then((c) => {
   $("save").hidden = !c.can_save;
   $("restoreOff").hidden = c.can_restore;
   $("drop").hidden = !c.can_restore;
+  $("signOut").hidden = !c.auth;
+  if (c.user) $("signOut").title = "Signed in as " + c.user;
   updateRestoreUi();
+});
+$("signOut").addEventListener("click", async () => {
+  await fetch("api/logout", { method: "POST" });
+  location.href = "login";
 });
 let startTab = "restore";
 try { startTab = localStorage.getItem("portrait.tab") || "restore"; } catch {}

@@ -1,5 +1,6 @@
 """Web app: restore photos with AI and make portrait cards; history per browser."""
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -11,15 +12,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import card, comfy, gpu, jobs, store
+from . import auth, card, comfy, gpu, jobs, store
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
 MAX_PHOTOS = int(os.environ.get("MAX_PHOTOS", "20"))   # portrait photos kept in memory
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
 RESTORE_MAX_SIDE = 2048  # restored photos are at most this big on the long side
+MAX_QUEUED = int(os.environ.get("MAX_QUEUED", "5"))  # unfinished restores one person may have
 COOKIE = "portrait_owner"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -38,17 +40,78 @@ app = FastAPI(title="Portrait card maker", lifespan=lifespan)
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # portrait session id -> photo, face
 
 
+PUBLIC = {"/login", "/api/login", "/healthz"}
+
+
+def _user_owner(username):
+    return "u" + hashlib.sha256(username.encode()).hexdigest()[:32]
+
+
 @app.middleware("http")
-async def owner_cookie(request: Request, call_next):
-    """Each browser gets a random id; its history is only visible to it."""
-    owner = request.cookies.get(COOKIE)
-    if not owner or not owner.isalnum():
-        owner = secrets.token_hex(16)
-        request.state.new_owner = owner
-    request.state.owner = owner
+async def owner_and_login(request: Request, call_next):
+    """Who owns the history: the signed-in account, or else this browser (random id in a cookie)."""
+    browser = request.cookies.get(COOKIE)
+    if not browser or not browser.isalnum():
+        browser = secrets.token_hex(16)
+        request.state.new_browser = browser
+    request.state.browser = browser
+    request.state.owner = browser
+    request.state.user = None
+    if auth.enabled():
+        user = auth.session_user(request.cookies.get(auth.COOKIE))
+        if user:
+            request.state.user = user
+            request.state.owner = _user_owner(user)
+        elif request.url.path not in PUBLIC:
+            if request.url.path.startswith("/api/"):
+                return JSONResponse({"detail": "Please sign in."}, 401)
+            return RedirectResponse("login", 303)
     response = await call_next(request)
-    if getattr(request.state, "new_owner", None):
-        response.set_cookie(COOKIE, owner, max_age=10 * 365 * 86400, httponly=True, samesite="lax")
+    if getattr(request.state, "new_browser", None):
+        response.set_cookie(COOKIE, browser, max_age=10 * 365 * 86400, httponly=True, samesite="lax")
+    return response
+
+
+def _https(request):
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+
+
+def _address(request):
+    return (request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "?"))
+
+
+@app.get("/login")
+def login_page():
+    if not auth.enabled():
+        return RedirectResponse("./", 303)
+    return FileResponse(STATIC / "login.html")
+
+
+@app.post("/api/login")
+async def login(request: Request, username: str = Form(""), password: str = Form("")):
+    if not auth.enabled():
+        return {"ok": True}
+    ok = await auth.check(_address(request), username, password)
+    if ok is None:
+        raise HTTPException(429, "Too many wrong tries. Wait 15 minutes and try again.")
+    if not ok:
+        raise HTTPException(401, "Wrong username or password.")
+    owner = _user_owner(username)
+    for item in store.all_items():  # bring this browser's earlier history into the account
+        if item["owner"] == request.state.browser:
+            item["owner"] = owner
+            store.save(item)
+    value, max_age = auth.make_session(username)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(auth.COOKIE, value, max_age=max_age, httponly=True, samesite="lax", secure=_https(request))
+    return response
+
+
+@app.post("/api/logout")
+def logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE)
     return response
 
 
@@ -74,9 +137,9 @@ def healthz():
 
 
 @app.get("/api/config")
-def config():
+def config(request: Request):
     return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled(), "can_pause": gpu.enabled(),
-            "retention_days": store.RETENTION_DAYS}
+            "retention_days": store.RETENTION_DAYS, "auth": auth.enabled(), "user": request.state.user}
 
 
 async def _read_upload(photo: UploadFile):
@@ -87,6 +150,13 @@ async def _read_upload(photo: UploadFile):
         return await run_in_threadpool(card.load_photo, data)
     except Exception:
         raise HTTPException(400, "Could not read that file as a photo.")
+
+
+def _queue_limit(request):
+    waiting = [i for i in store.for_owner(_owner(request)) if i["state"] in ("queued", "pausing", "running")]
+    if len(waiting) >= MAX_QUEUED:
+        raise HTTPException(429, f"You already have {len(waiting)} restores waiting. "
+                                 "Add more when some have finished.")
 
 
 async def _pause_check(allow_pause):
@@ -178,6 +248,7 @@ def _restore_target(w, h):
 async def start_restore(request: Request, photo: UploadFile = File(...), allow_pause: bool = Form(False)):
     if not comfy.enabled():
         raise HTTPException(400, "AI restore is not set up on this server.")
+    _queue_limit(request)
     im = await _read_upload(photo)
     ask = await _pause_check(allow_pause)
     if ask:
@@ -254,6 +325,7 @@ async def portrait_restore(request: Request, id: str = Form(...), zoom: float = 
     """Restore just the framed card area (best detail for a card)."""
     if not comfy.enabled():
         raise HTTPException(400, "AI restore is not set up on this server.")
+    _queue_limit(request)
     entry = _get(id)
     framing = _framing(zoom, dx, dy)
     ask = await _pause_check(allow_pause)

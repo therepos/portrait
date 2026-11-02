@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portrait Sign In</title>
+<style>
+  :root { --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #dddcd6;
+          --accent: #1d1d1b; --accent-text: #ffffff; --error: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #222220; --text: #ececea; --muted: #a2a29c; --line: #3a3a37;
+            --accent: #ececea; --accent-text: #161615; --error: #f2b8b5; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+  form { width: min(360px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+         padding: 24px; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  label { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+  input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 8px; padding: 10px 12px; width: 100%; }
+  button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text);
+           border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  #error { color: var(--error); font-size: 14px; min-height: 1.4em; margin: 0; }
+</style>
+</head>
+<body>
+<form id="login">
+  <h1>Sign in</h1>
+  <label>Username <input id="username" name="username" autocomplete="username" required autofocus></label>
+  <label>Password <input id="password" name="password" type="password" autocomplete="current-password" required></label>
+  <button id="go">Sign in</button>
+  <p id="error" role="alert"></p>
+</form>
+<script>
+document.getElementById("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const go = document.getElementById("go"), err = document.getElementById("error");
+  go.disabled = true; err.textContent = "";
+  const res = await fetch("api/login", { method: "POST", body: new FormData(e.target) });
+  go.disabled = false;
+  if (res.ok) { location.href = "./"; return; }
+  try { err.textContent = (await res.json()).detail; } catch { err.textContent = "Sign in failed."; }
+});
+</script>
+</body>
+</html>

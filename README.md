@@ -61,6 +61,24 @@ back; the queue keeps running. Finished photos can be downloaded or opened with
 Delete. Each browser only sees its own (a random id in a cookie). Items are deleted after
 `RETENTION_DAYS` (default 7). Mount `/data` to keep them across container updates.
 
+## Sign in
+
+Set `AUTH_USERNAME` and `AUTH_PASSWORD` and every page and API needs signing in first.
+History then belongs to the account instead of the browser, so it is the same on every
+device; whatever a browser made before signing in moves into the account. Sessions last
+30 days; changing the password signs everyone out. Wrong passwords are slowed down and
+lock out for 15 minutes after 10 tries. Keep the password out of version control, for
+example as a Portainer stack variable:
+
+```yaml
+    environment:
+      AUTH_USERNAME: ${PORTRAIT_USERNAME:?set it in the stack}
+      AUTH_PASSWORD: ${PORTRAIT_PASSWORD:?set it in the stack}
+```
+
+Without them the app is open to anyone who can reach it, with history per browser;
+fine on a home network, not on the internet.
+
 ## How the framing works
 
 A face detector ([YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet))
@@ -76,6 +94,8 @@ top. These numbers were measured from a hand-made card and live in the template
 | `SAVE_DIR` | unset | Folder inside the container for **Save to folder** |
 | `DATA_DIR` | `/data` | History and restore queue; mount it to keep them across updates |
 | `RETENTION_DAYS` | `7` | History items are deleted after this many days |
+| `AUTH_USERNAME`, `AUTH_PASSWORD` | unset | Require signing in (see below) |
+| `MAX_QUEUED` | `5` | Unfinished restores one person may have at once |
 | `TEMPLATE_DIR` | built-in | Folder with your own `template.json` (see below) |
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
