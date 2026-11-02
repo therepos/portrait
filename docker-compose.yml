@@ -1,0 +1,13 @@
+services:
+  portrait:
+    image: ghcr.io/therepos/portrait:latest
+    container_name: portrait
+    restart: unless-stopped
+    ports:
+      - "8080:8000"
+    environment:
+      # Folder inside the container where "Save to folder" writes cards.
+      # Remove this line (and the volume) to only offer Download.
+      SAVE_DIR: /output
+    volumes:
+      - ./output:/output
