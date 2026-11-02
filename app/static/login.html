@@ -24,6 +24,10 @@
            border-radius: 8px; padding: 10px 14px; cursor: pointer; }
   button:disabled { opacity: .5; }
   #error { color: var(--error); font-size: 14px; min-height: 1.4em; margin: 0; }
+  details { font-size: 14px; color: var(--muted); }
+  summary { cursor: pointer; width: max-content; }
+  .note { margin: 8px 0 0; }
+  code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--text); }
 </style>
 </head>
 <body>
@@ -33,6 +37,11 @@
   <label>Password <input id="password" name="password" type="password" autocomplete="current-password" required></label>
   <button id="go">Sign in</button>
   <p id="error" role="alert"></p>
+  <details>
+    <summary>Forgot password?</summary>
+    <p class="note">The password is set by whoever runs this app, in the <code>AUTH_PASSWORD</code>
+      environment variable. Change it there and restart the app.</p>
+  </details>
 </form>
 <script>
 document.getElementById("login").addEventListener("submit", async (e) => {

@@ -2,7 +2,8 @@
 
 Set AUTH_USERNAME and AUTH_PASSWORD to require signing in. The session is a
 signed cookie (no server-side state); changing the password signs everyone out.
-Without them the app stays open, with history kept per browser.
+Without them the app only shows a setup notice, unless ALLOW_NO_LOGIN=true makes
+it open to anyone who can reach it, with history kept per browser.
 """
 import asyncio
 import hashlib
@@ -15,6 +16,8 @@ from . import store
 
 USERNAME = os.environ.get("AUTH_USERNAME") or ""
 PASSWORD = os.environ.get("AUTH_PASSWORD") or ""
+# Without a username and password the app refuses to run, unless running open is chosen on purpose
+ALLOW_OPEN = (os.environ.get("ALLOW_NO_LOGIN") or "").lower() in ("1", "true", "yes")
 SESSION_DAYS = 30
 COOKIE = "portrait_session"
 MAX_FAILURES = 10          # per address, then locked out for LOCKOUT seconds
@@ -25,6 +28,10 @@ _failures: dict = {}       # address -> (count, first failure time)
 
 def enabled():
     return bool(USERNAME and PASSWORD)
+
+
+def setup_needed():
+    return not enabled() and not ALLOW_OPEN
 
 
 def _secret():

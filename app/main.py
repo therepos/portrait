@@ -57,6 +57,10 @@ async def owner_and_login(request: Request, call_next):
     request.state.browser = browser
     request.state.owner = browser
     request.state.user = None
+    if auth.setup_needed() and request.url.path != "/healthz":
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Sign-in is not set up on this server."}, 503)
+        return FileResponse(STATIC / "setup.html", status_code=503)
     if auth.enabled():
         user = auth.session_user(request.cookies.get(auth.COOKIE))
         if user:

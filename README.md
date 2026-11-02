@@ -76,8 +76,12 @@ example as a Portainer stack variable:
       AUTH_PASSWORD: ${PORTRAIT_PASSWORD:?set it in the stack}
 ```
 
-Without them the app is open to anyone who can reach it, with history per browser;
-fine on a home network, not on the internet.
+Forgot the password? Change `AUTH_PASSWORD` and restart the app; the sign-in page says so
+under *Forgot password?*.
+
+Without a username and password the app only shows a *Setup needed* page. To run it
+with no sign-in, for example only on a home network, set `ALLOW_NO_LOGIN=true`; history is
+then kept per browser.
 
 ## How the framing works
 
@@ -94,7 +98,8 @@ top. These numbers were measured from a hand-made card and live in the template
 | `SAVE_DIR` | unset | Folder inside the container for **Save to folder** |
 | `DATA_DIR` | `/data` | History and restore queue; mount it to keep them across updates |
 | `RETENTION_DAYS` | `7` | History items are deleted after this many days |
-| `AUTH_USERNAME`, `AUTH_PASSWORD` | unset | Require signing in (see below) |
+| `AUTH_USERNAME`, `AUTH_PASSWORD` | unset | The sign-in (see below). Without them the app only shows a setup notice |
+| `ALLOW_NO_LOGIN` | `false` | `true` runs the app with no sign-in, open to anyone who can reach it |
 | `MAX_QUEUED` | `5` | Unfinished restores one person may have at once |
 | `TEMPLATE_DIR` | built-in | Folder with your own `template.json` (see below) |
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |

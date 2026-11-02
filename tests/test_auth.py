@@ -7,7 +7,8 @@ from app import auth, main, store
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    def make(username="ryan", password="s3cret"):
+    def make(username="ryan", password="s3cret", allow_open=None):
+        monkeypatch.setattr(auth, "ALLOW_OPEN", (not username) if allow_open is None else allow_open)
         monkeypatch.setattr(store, "DATA_DIR", tmp_path)
         monkeypatch.setattr(store, "ITEMS", tmp_path / "items")
         monkeypatch.setattr(auth, "USERNAME", username)
@@ -19,6 +20,14 @@ def client(monkeypatch, tmp_path):
         monkeypatch.setattr(auth.asyncio, "sleep", no_wait)
         return TestClient(main.app)  # no lifespan: the restore worker isn't needed here
     return make
+
+
+def test_setup_needed_without_account(client):
+    c = client(username="", password="", allow_open=False)
+    r = c.get("/")
+    assert r.status_code == 503 and "Setup needed" in r.text
+    assert c.get("/api/items").status_code == 503
+    assert c.get("/healthz").status_code == 200  # container health check still passes
 
 
 def test_open_without_account(client):

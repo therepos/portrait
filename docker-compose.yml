@@ -6,9 +6,10 @@ services:
     ports:
       - "8080:8000"
     environment:
-      # Require signing in (recommended if reachable from the internet):
-      # AUTH_USERNAME: me
-      # AUTH_PASSWORD: change-me
+      # Sign-in (required unless ALLOW_NO_LOGIN is true):
+      AUTH_USERNAME: me
+      AUTH_PASSWORD: change-me
+      # ALLOW_NO_LOGIN: "true"   # no sign-in at all; only on a network you trust
       # Folder inside the container where "Save to folder" writes cards.
       # Remove this line (and the volume) to only offer Download.
       SAVE_DIR: /output
