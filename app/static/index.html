@@ -37,6 +37,13 @@
   input[type=text] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
                      border-radius: 8px; padding: 10px 12px; width: 100%; }
   input[type=file] { font: inherit; color: var(--text); }
+  input[type=number], select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                               border-radius: 8px; padding: 10px 12px; width: 100%; }
+  .sub { display: grid; gap: 12px; padding-left: 12px; border-left: 2px solid var(--line); }
+  .grow { flex: 1; min-width: 0; }
+  .times { color: var(--muted); padding-top: 22px; }
+  .switch { display: flex; gap: 10px; align-items: center; color: var(--text); font-size: 15px; }
+  .switch input { width: 18px; height: 18px; margin: 0; }
   input[type=range] { width: 100%; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text);
@@ -87,7 +94,7 @@
 <div class="wrap">
   <nav class="tabs" role="tablist">
     <button id="tabRestore" role="tab" aria-selected="true">Restore</button>
-    <button id="tabPortrait" role="tab" aria-selected="false">Portrait</button>
+    <button id="tabPortrait" role="tab" aria-selected="false">Frame</button>
     <span style="flex:1"></span>
     <button id="signOut" class="small" hidden>Sign out</button>
   </nav>
@@ -118,18 +125,44 @@
     <div class="editor">
       <section class="panel">
         <div>
-          <h1>Portrait card</h1>
-          <p class="muted">Pick a photo, type the caption, then download or save.</p>
+          <h1>Frame a photo</h1>
+          <p class="muted">Pick a photo and a layout, then move and zoom until it looks right. Add a caption if you like.</p>
         </div>
         <label>Photo
           <input id="photo" type="file" accept="image/*">
         </label>
-        <label>Date
-          <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
+        <label>Layout
+          <select id="layout"></select>
         </label>
-        <label>Name
-          <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
-        </label>
+        <div id="customBox" class="sub" hidden>
+          <div class="row">
+            <label class="grow">Width <input id="customW" type="number" min="200" max="4000" step="1" inputmode="numeric"></label>
+            <span class="times">×</span>
+            <label class="grow">Height <input id="customH" type="number" min="200" max="4000" step="1" inputmode="numeric"></label>
+          </div>
+          <label>Name (to save it) <input id="customName" type="text" placeholder="My layout" autocomplete="off"></label>
+          <div class="row">
+            <button id="customSave" class="small">Save layout</button>
+            <button id="customDelete" class="small" hidden>Delete this layout</button>
+          </div>
+        </div>
+        <label class="switch"><input id="caption" type="checkbox" checked> Add caption</label>
+        <div id="captionBox" class="sub">
+          <label>Date
+            <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
+          </label>
+          <label>Name
+            <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
+          </label>
+          <label>Font
+            <select id="font"></select>
+          </label>
+          <div class="row">
+            <button id="fontRemove" class="small" hidden>Remove this font</button>
+          </div>
+          <p class="muted">Add your own .ttf or .otf fonts with "Add font…". They stay on this server.</p>
+          <input id="fontFile" type="file" accept=".ttf,.otf,.ttc,font/ttf,font/otf" hidden>
+        </div>
         <label>Zoom <span id="zoomVal">100%</span>
           <input id="zoom" type="range" min="0.6" max="1.8" step="0.02" value="1">
         </label>
@@ -143,20 +176,20 @@
         <p id="status" class="status" role="status"></p>
       </section>
       <section class="preview">
-        <div id="placeholder" class="placeholder">Your card appears here.</div>
+        <div id="placeholder" class="placeholder">Your picture appears here.</div>
         <div>
-          <div id="stage" class="stage" hidden><img id="card" alt="Card preview" draggable="false"></div>
+          <div id="stage" class="stage" hidden><img id="card" alt="Preview" draggable="false"></div>
           <p id="hint" class="hint" hidden>Drag the photo to move it. Scroll or pinch to zoom.</p>
         </div>
       </section>
     </div>
-    <section class="history" aria-label="Portrait cards">
+    <section class="history" aria-label="Framed photos">
       <div class="row" style="justify-content:space-between">
-        <h2>Portrait cards</h2>
+        <h2>Framed photos</h2>
         <span class="muted retention"></span>
       </div>
       <div id="cardList" class="history"></div>
-      <p id="cardEmpty" class="muted">Cards you download or save appear here.</p>
+      <p id="cardEmpty" class="muted">Pictures you download or save appear here.</p>
     </section>
   </div>
 </div>
@@ -182,7 +215,9 @@ window.fetch = async (...args) => {
 };
 const $ = (id) => document.getElementById(id);
 const config = { can_save: false, can_restore: false };
-const state = { id: null, dx: 0, dy: 0, zoom: 1, url: null, shown: { dx: 0, dy: 0, zoom: 1 } };
+const state = { id: null, dx: 0, dy: 0, zoom: 1, url: null, shown: { dx: 0, dy: 0, zoom: 1, width: 1200, origin: [0.5, 0.38] } };
+let settings = { layout: "card", caption: true, font: "builtin", custom_layouts: [] };
+let builtinLayouts = [];
 const FINAL = ["done", "error", "cancelled"];
 const PHOTO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/>' +
@@ -337,7 +372,7 @@ function renderList(boxId, emptyId, list) {
       };
       if (it.state === "done") {
         add("Download", () => { location.href = "api/items/" + it.id + "/file"; }, true);
-        if (it.kind === "restore") add("Create Portrait", () => createPortrait(it.id));
+        if (it.kind === "restore") add("Frame Photo", () => framePhoto(it.id));
       }
       if (active) add("Cancel", async () => { await fetch("api/items/" + it.id + "/cancel", { method: "POST" }); refresh(); });
       else add("Delete", async () => {
@@ -363,7 +398,7 @@ function poll() {
   setTimeout(async () => { await refresh(); poll(); }, busy ? 2000 : 15000);
 }
 
-async function createPortrait(itemId) {
+async function framePhoto(itemId) {
   showTab("portrait");
   window.scrollTo({ top: 0 });
   status("Opening the restored photo…");
@@ -373,15 +408,132 @@ async function createPortrait(itemId) {
   startSession((await res.json()).id);
 }
 
-// ---- portrait tab ----
+// ---- frame tab: settings (remembered per account) ----
 const d = new Date();
 $("date").value = d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" });
+
+let saveTimer = null;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => fetch("api/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
+  }), 300);
+}
+
+// The layout select: built-ins, saved custom sizes ("saved:<n>"), and "new" for a custom size
+function fillLayouts() {
+  const sel = $("layout");
+  sel.innerHTML = "";
+  builtinLayouts.forEach((l) => sel.append(new Option(l.name, l.id)));
+  settings.custom_layouts.forEach((c, i) => sel.append(new Option(c.name + " · " + c.width + "×" + c.height, "saved:" + i)));
+  sel.append(new Option("Custom size…", "new"));
+  sel.value = [...sel.options].some((o) => o.value === settings.layout) ? settings.layout : "card";
+  showCustom();
+}
+function currentLayout() {
+  const v = $("layout").value;
+  if (v.startsWith("saved:")) {
+    const c = settings.custom_layouts[Number(v.slice(6))];
+    if (c) return { layout: "custom", width: c.width, height: c.height };
+  }
+  if (v === "new") return { layout: "custom", width: Number($("customW").value) || 1080, height: Number($("customH").value) || 1350 };
+  return { layout: v, width: 0, height: 0 };
+}
+function showCustom() {
+  const v = $("layout").value;
+  $("customBox").hidden = !(v === "new" || v.startsWith("saved:"));
+  $("customDelete").hidden = !v.startsWith("saved:");
+  $("customSave").hidden = !(v === "new");
+  $("customName").parentElement.hidden = !(v === "new");
+  if (v.startsWith("saved:")) {
+    const c = settings.custom_layouts[Number(v.slice(6))];
+    $("customW").value = c.width; $("customH").value = c.height;
+    $("customW").disabled = $("customH").disabled = true;
+  } else {
+    $("customW").disabled = $("customH").disabled = false;
+    if (!$("customW").value) { $("customW").value = 1080; $("customH").value = 1350; }
+  }
+}
+function layoutChanged() {
+  if ($("layout").value !== "new") { settings.layout = $("layout").value; saveSettings(); }
+  showCustom();
+  state.dx = 0; state.dy = 0; state.zoom = 1;
+  framingChanged();
+}
+$("layout").addEventListener("change", layoutChanged);
+["customW", "customH"].forEach((id) => $(id).addEventListener("change", () => {
+  const lo = 200, hi = 4000;
+  $(id).value = Math.min(hi, Math.max(lo, Math.round(Number($(id).value) || lo)));
+  state.dx = 0; state.dy = 0; framingChanged();
+}));
+$("customSave").addEventListener("click", () => {
+  const c = { name: $("customName").value.trim() || "Custom", width: Number($("customW").value), height: Number($("customH").value) };
+  settings.custom_layouts.push(c);
+  settings.layout = "saved:" + (settings.custom_layouts.length - 1);
+  $("customName").value = "";
+  fillLayouts(); saveSettings(); status("Saved the layout “" + c.name + "”.");
+});
+$("customDelete").addEventListener("click", () => {
+  const i = Number($("layout").value.slice(6));
+  if (!confirm("Delete the layout “" + settings.custom_layouts[i].name + "”?")) return;
+  settings.custom_layouts.splice(i, 1);
+  settings.layout = "card";
+  fillLayouts(); saveSettings(); layoutChanged();
+});
+
+function showCaption() { $("captionBox").hidden = !$("caption").checked; }
+$("caption").addEventListener("change", () => {
+  settings.caption = $("caption").checked; saveSettings(); showCaption(); render(false);
+});
+
+async function fillFonts(list) {
+  if (!list) list = (await (await fetch("api/fonts")).json()).fonts;
+  const sel = $("font");
+  sel.innerHTML = "";
+  list.forEach((f) => sel.append(new Option(f.name, f.id)));
+  sel.append(new Option("Add font…", "add"));
+  sel.value = list.some((f) => f.id === settings.font) ? settings.font : "builtin";
+  $("fontRemove").hidden = sel.value === "builtin";
+}
+$("font").addEventListener("change", () => {
+  if ($("font").value === "add") { $("font").value = settings.font; $("fontFile").click(); return; }
+  settings.font = $("font").value; saveSettings();
+  $("fontRemove").hidden = settings.font === "builtin";
+  render(false);
+});
+$("fontFile").addEventListener("change", async () => {
+  const file = $("fontFile").files[0];
+  $("fontFile").value = "";
+  if (!file) return;
+  status("Adding " + file.name + "…");
+  const f = new FormData(); f.append("font", file);
+  const res = await fetch("api/fonts", { method: "POST", body: f });
+  if (!res.ok) return status(await errorText(res), true);
+  const data = await res.json();
+  settings.font = data.id; saveSettings();
+  await fillFonts(data.fonts);
+  status("Font added."); render(false);
+});
+$("fontRemove").addEventListener("click", async () => {
+  const name = $("font").selectedOptions[0].text;
+  if (!confirm("Remove the font “" + name + "” from this server?")) return;
+  const res = await fetch("api/fonts/" + encodeURIComponent($("font").value), { method: "DELETE" });
+  settings.font = "builtin"; saveSettings();
+  await fillFonts((await res.json()).fonts);
+  render(false);
+});
 
 function form(view = state) {
   const f = new FormData();
   f.append("id", state.id);
+  const l = currentLayout();
+  f.append("layout", l.layout);
+  f.append("width", l.width);
+  f.append("height", l.height);
+  f.append("caption", $("caption").checked ? "true" : "false");
   f.append("date", $("date").value);
   f.append("name", $("name").value);
+  f.append("font", settings.font);
   f.append("zoom", view.zoom);
   f.append("dx", Math.round(view.dx));
   f.append("dy", Math.round(view.dy));
@@ -406,7 +558,9 @@ async function render(preview = false) {
       return;
     }
     const blob = await res.blob();
-    const used = { dx: Number(res.headers.get("X-Dx")), dy: Number(res.headers.get("X-Dy")), zoom: view.zoom };
+    const used = { dx: Number(res.headers.get("X-Dx")), dy: Number(res.headers.get("X-Dy")), zoom: view.zoom,
+                   width: Number(res.headers.get("X-Width")) || 1200,
+                   origin: (res.headers.get("X-Origin") || "0.5,0.38").split(",").map(Number) };
     if (!dragging && !pending) { state.dx = used.dx; state.dy = used.dy; }  // stop at the photo's edges
     const url = URL.createObjectURL(blob);
     await new Promise((ok) => { $("card").onload = ok; $("card").onerror = ok; $("card").src = url; });
@@ -424,10 +578,10 @@ async function render(preview = false) {
 }
 function applyTransform() {
   const img = $("card");
-  const k = img.clientWidth ? img.clientWidth / 1200 : 0;  // screen pixels per card pixel
+  const k = img.clientWidth ? img.clientWidth / state.shown.width : 0;  // screen pixels per picture pixel
   const s = state.zoom / state.shown.zoom;
   const tx = (state.dx - state.shown.dx * s) * k, ty = (state.dy - state.shown.dy * s) * k;
-  img.style.transformOrigin = "50% 38%";
+  img.style.transformOrigin = state.shown.origin[0] * 100 + "% " + state.shown.origin[1] * 100 + "%";
   img.style.transform = (tx || ty || s !== 1) ? `translate(${tx}px, ${ty}px) scale(${s})` : "";
 }
 function framingChanged() {
@@ -467,7 +621,7 @@ $("stage").addEventListener("pointermove", (e) => {
     const [a, b] = [...pointers.values()];
     state.zoom = clampZoom(pinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / pinch.dist);
   } else if (pointers.size === 1) {
-    const k = 1200 / $("card").clientWidth;  // card pixels per screen pixel
+    const k = state.shown.width / $("card").clientWidth;  // picture pixels per screen pixel
     state.dx += (e.clientX - last.x) * k;
     state.dy += (e.clientY - last.y) * k;
     last = { x: e.clientX, y: e.clientY };
@@ -491,7 +645,7 @@ window.addEventListener("resize", applyTransform);
 
 function startSession(id) {
   state.id = id; state.dx = 0; state.dy = 0; state.zoom = 1;
-  state.shown = { dx: 0, dy: 0, zoom: 1 };
+  state.shown = { ...state.shown, dx: 0, dy: 0, zoom: 1 };
   $("zoom").value = 1; $("zoomVal").textContent = "100%";
   status(""); render(false);
 }
@@ -537,6 +691,13 @@ $("signOut").addEventListener("click", async () => {
   await fetch("api/logout", { method: "POST" });
   location.href = "login";
 });
+Promise.all([fetch("api/settings").then((r) => r.json()), fetch("api/layouts").then((r) => r.json())])
+  .then(([saved, l]) => {
+    settings = saved; builtinLayouts = l.layouts;
+    fillLayouts();
+    $("caption").checked = settings.caption; showCaption();
+    fillFonts();
+  });
 let startTab = "restore";
 try { startTab = localStorage.getItem("portrait.tab") || "restore"; } catch {}
 showTab(startTab);

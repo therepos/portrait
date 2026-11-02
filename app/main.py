@@ -8,13 +8,14 @@ import secrets
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, card, comfy, gpu, jobs, store
+from . import auth, card, comfy, fonts, gpu, jobs, store
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
@@ -265,17 +266,13 @@ async def start_restore(request: Request, photo: UploadFile = File(...), allow_p
     return _public(item)
 
 
-# ---- portrait tab ----------------------------------------------------------
+# ---- frame tab -------------------------------------------------------------
 
 def _get(photo_id):
     if photo_id not in _photos:
         raise HTTPException(404, "Photo expired, please upload it again.")
     _photos.move_to_end(photo_id)
     return _photos[photo_id]
-
-
-def _framing(zoom, dx, dy):
-    return [round(min(max(zoom, 0.5), 2.5), 3), dx, dy]
 
 
 def _session(im, name):
@@ -305,28 +302,59 @@ async def photo_from_item(request: Request, item: str = Form(...)):
     return await run_in_threadpool(_session, im, it.get("name") or "photo")
 
 
-def _render(photo_id, date, name, zoom, dx, dy):
-    entry = _get(photo_id)
-    return card.render(entry["photo"], entry["face"], date, name, *_framing(zoom, dx, dy))
+@dataclass
+class Frame:
+    id: str
+    layout: str
+    width: int
+    height: int
+    caption: bool
+    date: str
+    name: str
+    font: str
+    zoom: float
+    dx: int
+    dy: int
+
+
+def frame_form(id: str = Form(...), layout: str = Form("card"), width: int = Form(0), height: int = Form(0),
+               caption: bool = Form(True), date: str = Form(""), name: str = Form(""), font: str = Form("builtin"),
+               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
+    return Frame(id, layout, width, height, caption, date, name, font, min(max(zoom, 0.5), 2.5), dx, dy)
+
+
+def _render(f: Frame):
+    entry = _get(f.id)
+    layout = card.resolve(f.layout, f.width, f.height)
+    caption = (f.date, f.name, f.font) if f.caption else None
+    im, dx, dy = card.render(entry["photo"], entry["face"], layout, f.zoom, f.dx, f.dy, caption)
+    return im, dx, dy, layout
 
 
 @app.post("/api/card")
-async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), preview: bool = Form(False)):
-    """Card preview. X-Dx/X-Dy report the shift actually used, after stopping at the photo's edges."""
-    im, dx, dy = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
+async def make_card(f: Frame = Depends(frame_form), preview: bool = Form(False)):
+    """Preview. X-Dx/X-Dy report the shift actually used, after stopping at the photo's edges;
+    X-Origin is where the face is anchored (fractions of width and height)."""
+    im, dx, dy, layout = await run_in_threadpool(_render, f)
     data, kind = (card.to_jpeg(im), "image/jpeg") if preview else (card.to_png(im), "image/png")
-    return Response(data, media_type=kind, headers={"Cache-Control": "no-store", "X-Dx": str(dx), "X-Dy": str(dy)})
+    return Response(data, media_type=kind, headers={
+        "Cache-Control": "no-store", "X-Dx": str(dx), "X-Dy": str(dy), "X-Width": str(layout.width),
+        "X-Origin": f"{layout.face_cx},{layout.eye_y}"})
 
 
-def _safe_stem(name):
-    first = (name.split() or ["card"])[0]
-    stem = re.sub(r"[^\w-]", "", first.lower())
-    return stem or "card"
+def _file_stem(f: Frame):
+    """Download name: the first word of the caption name, else the photo's name."""
+    if f.caption and f.name.split():
+        stem = re.sub(r"[^\w-]", "", f.name.split()[0].lower())
+        if stem:
+            return stem
+    photo = _photos.get(f.id, {}).get("name") or "photo"
+    stem = re.sub(r"[^\w-]+", "-", photo.rsplit(".", 1)[0]).strip("-").lower() or "photo"
+    return f"{stem}-framed"
 
 
-async def _keep_card(request, png, name):
-    item = store.create(_owner(request), "card", publish=False, name=f"{_safe_stem(name)}.png")
+async def _keep_card(request, png, stem):
+    item = store.create(_owner(request), "card", publish=False, name=f"{stem}.png")
     store.put_bytes(item, "card.png", png)
     await run_in_threadpool(store.put_thumb, item, card.Image.open(store.path(item, "card.png")))
     store.save(item)
@@ -334,22 +362,20 @@ async def _keep_card(request, png, name):
 
 
 @app.post("/api/cards")
-async def keep_card(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
-    """Render the card, add it to the history and return its download link."""
-    im, _, _ = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
-    item = await _keep_card(request, card.to_png(im), name)
+async def keep_card(request: Request, f: Frame = Depends(frame_form)):
+    """Render the picture, add it to the history and return its download link."""
+    im, _, _, _ = await run_in_threadpool(_render, f)
+    item = await _keep_card(request, card.to_png(im), _file_stem(f))
     return {"item": item["id"], "download": f"api/items/{item['id']}/file"}
 
 
 @app.post("/api/save")
-async def save(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
-               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
+async def save(request: Request, f: Frame = Depends(frame_form)):
     if SAVE_DIR is None:
         raise HTTPException(400, "Saving to a folder is not set up on this server.")
-    im, _, _ = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
+    im, _, _, _ = await run_in_threadpool(_render, f)
     png = card.to_png(im)
-    stem = _safe_stem(name)
+    stem = _file_stem(f)
     out, n = SAVE_DIR / f"{stem}.png", 2
     while out.exists():  # never overwrite
         out, n = SAVE_DIR / f"{stem}-{n}.png", n + 1
@@ -357,5 +383,63 @@ async def save(request: Request, id: str = Form(...), date: str = Form(""), name
         out.write_bytes(png)
     except OSError:
         raise HTTPException(500, f"Cannot write to the save folder ({SAVE_DIR}). Check it exists and is writable by user 1000.")
-    await _keep_card(request, png, name)
+    await _keep_card(request, png, stem)
     return {"saved": out.name}
+
+
+# ---- layouts, fonts, settings ----------------------------------------------
+
+@app.get("/api/layouts")
+def layouts():
+    return {"layouts": [l.public() for l in card.LAYOUTS],
+            "min_side": card.MIN_SIDE, "max_side": card.MAX_LAYOUT_SIDE}
+
+
+@app.get("/api/fonts")
+def list_fonts():
+    return {"fonts": fonts.list_fonts()}
+
+
+@app.post("/api/fonts")
+async def add_font(font: UploadFile = File(...)):
+    data = await font.read()
+    try:
+        font_id = await run_in_threadpool(fonts.add, font.filename, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": font_id, "fonts": fonts.list_fonts()}
+
+
+@app.delete("/api/fonts/{font_id}")
+def delete_font(font_id: str):
+    fonts.remove(font_id)
+    return {"fonts": fonts.list_fonts()}
+
+
+@app.get("/api/settings")
+def get_settings(request: Request):
+    return store.get_settings(_owner(request))
+
+
+@app.put("/api/settings")
+async def put_settings(request: Request):
+    body = await request.json()
+    s = store.get_settings(_owner(request))
+    if isinstance(body.get("layout"), str):
+        s["layout"] = body["layout"][:40]
+    if isinstance(body.get("caption"), bool):
+        s["caption"] = body["caption"]
+    if isinstance(body.get("font"), str):
+        s["font"] = body["font"][:200]
+    if isinstance(body.get("custom_layouts"), list):
+        customs = []
+        for c in body["custom_layouts"][:20]:
+            try:
+                w, h = int(c["width"]), int(c["height"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if card.MIN_SIDE <= w <= card.MAX_LAYOUT_SIDE and card.MIN_SIDE <= h <= card.MAX_LAYOUT_SIDE:
+                customs.append({"name": str(c.get("name") or "Custom")[:40], "width": w, "height": h})
+        s["custom_layouts"] = customs
+    store.put_settings(_owner(request), s)
+    return s

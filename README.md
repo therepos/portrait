@@ -1,9 +1,13 @@
 # portrait
 
-A small web app that turns a photo into a 1200×1541 profile card: it finds the
-face, crops head-and-shoulders to a fixed framing, and adds a white caption strip
-reading `date | name`. It replaces a manual GIMP routine (open template, scale,
-fixed-size select, paste, edit caption, export).
+A small self-hosted web app with two tools:
+
+- **Restore:** sharpens blurry or small photos with AI (through your ComfyUI).
+- **Frame:** finds the face and frames the photo for a layout (Pinterest pin, Instagram
+  post, story, profile picture, the original card, or your own size). Drag and zoom to
+  adjust, and optionally add a white caption strip reading `date | name`.
+
+It started as a replacement for a manual GIMP routine for captioned portrait cards.
 
 Works from a phone or a desktop browser. Chinese names are supported.
 Optionally, it can send the framed crop through a ComfyUI workflow (for example
@@ -48,16 +52,29 @@ minutes each, one at a time) with a progress bar and time left. Leave the page a
 back; the queue keeps running. Finished photos can be downloaded or opened with
 **Create Portrait**.
 
-**Portrait tab:**
+**Frame tab:**
 
-1. Pick a photo (or come from **Create Portrait** on a restored photo).
-2. Type the date (pre-filled with today) and name.
+1. Pick a photo (or use **Frame Photo** on a restored one).
+2. Choose a layout. **Custom size…** takes any width and height and can be saved by name.
 3. Drag the photo in the preview to move it; scroll or pinch (or the slider) to zoom.
    **Reset framing** goes back to the automatic framing.
-4. **Download** or **Save to folder**.
+4. Optional: **Add caption** with a date, a name and a font. **Add font…** uploads your
+   own `.ttf`/`.otf` files (kept on the server only); characters a font lacks, such as
+   Chinese, fall back to the built-in Noto Sans TC.
+5. **Download** or **Save to folder**.
 
-**History:** each tab lists its own: restored photos (Download, Create Portrait, Delete)
-and portrait cards (Download, Delete). Each browser only sees its own (a random id in a cookie). Items are deleted after
+Layout, caption, font and saved custom sizes are remembered per account (or per browser).
+
+| Layout | Size |
+|---|---|
+| Card | 1200×1541 |
+| Pinterest pin | 1000×1500 |
+| Instagram post | 1080×1350 |
+| Story (Instagram, TikTok, Pinterest) | 1080×1920 |
+| Profile picture | 1080×1080 |
+
+**History:** each tab lists its own: restored photos (Download, Frame Photo, Delete)
+and framed photos (Download, Delete). Each browser only sees its own (a random id in a cookie). Items are deleted after
 `RETENTION_DAYS` (default 7). Mount `/data` to keep them across container updates.
 
 ## Sign in
@@ -85,10 +102,10 @@ then kept per browser.
 ## How the framing works
 
 A face detector ([YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet))
-finds the largest face and its eyes. The photo is scaled so the face box is 35% of
-the card width, the face is centred horizontally, and the eye line sits 38% from the
-top. These numbers were measured from a hand-made card and live in the template
-(see below).
+finds the largest face and its eyes. The photo is scaled so the face box is a set share
+of the width, the face is centred, and the eye line sits a set share from the top. Each
+layout has its own numbers (`app/card.py`; the Card's were measured from a hand-made
+card); custom sizes are interpolated from their shape.
 
 ## Settings
 
@@ -100,7 +117,6 @@ top. These numbers were measured from a hand-made card and live in the template
 | `AUTH_USERNAME`, `AUTH_PASSWORD` | unset | The sign-in (see below). Without them the app only shows a setup notice |
 | `ALLOW_NO_LOGIN` | `false` | `true` runs the app with no sign-in, open to anyone who can reach it |
 | `MAX_QUEUED` | `5` | Unfinished restores one person may have at once |
-| `TEMPLATE_DIR` | built-in | Folder with your own `template.json` (see below) |
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
 | `COMFYUI_TIMEOUT` | `900` | Seconds to wait for one restore |
@@ -109,14 +125,6 @@ top. These numbers were measured from a hand-made card and live in the template
 | `RESTORE_VRAM_GB` | `16` | Free GPU memory a restore needs before it runs |
 | `MAX_UPLOAD_MB` | `40` | Largest accepted upload |
 | `MAX_PHOTOS` | `20` | Uploaded photos kept in memory for re-rendering |
-
-## Template
-
-The layout (card size, face framing, overlay image, caption font and position) is in
-[`app/template/template.json`](app/template/template.json). To change it without
-rebuilding, copy that file into a folder, edit it, mount the folder and set
-`TEMPLATE_DIR`. Images and fonts it names are looked up in that folder first, then in
-the built-in template and assets.
 
 ## AI restore with ComfyUI
 
@@ -196,4 +204,3 @@ Every push to `main` builds and publishes `ghcr.io/therepos/portrait:latest`
 | `texgyreheros-bold.otf` | TeX Gyre Heros (Helvetica-style) | GUST Font License |
 | `NotoSansTC-Bold.otf` | Noto Sans CJK TC | SIL Open Font License 1.1 |
 | `face_detection_yunet.onnx` | OpenCV Zoo YuNet | MIT |
-| `caption_strip.png` | Extracted from the original GIMP template | — |

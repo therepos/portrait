@@ -122,3 +122,22 @@ def orphans(min_age=86400):
     cutoff = time.time() - min_age
     return [d.name for d in ITEMS.iterdir()
             if d.is_dir() and not (d / "item.json").exists() and d.stat().st_mtime < cutoff]
+
+
+DEFAULT_SETTINGS = {"layout": "card", "caption": True, "font": "builtin", "custom_layouts": []}
+
+
+def get_settings(owner):
+    try:
+        saved = json.loads((DATA_DIR / "settings" / f"{owner}.json").read_text())
+    except (OSError, ValueError):
+        saved = {}
+    return {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
+
+
+def put_settings(owner, settings):
+    d = DATA_DIR / "settings"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{owner}.json.tmp"
+    tmp.write_text(json.dumps(settings))
+    tmp.replace(d / f"{owner}.json")
