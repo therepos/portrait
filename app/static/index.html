@@ -48,6 +48,10 @@
     .placeholder { padding: 16px 12px; }
   }
   .placeholder { color: var(--muted); text-align: center; padding: 40px 12px; }
+  .restore { display: grid; gap: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: max-content; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-text); }
   #status { font-size: 14px; color: var(--muted); min-height: 1.4em; margin: 0; }
   #status.error { color: var(--error); }
   .muted { color: var(--muted); font-size: 13px; margin: 0; }
@@ -82,6 +86,14 @@
         <span></span><button data-dy="25" aria-label="Down">↓</button><span></span>
       </div>
     </div>
+    <div id="restoreBox" class="restore" hidden>
+      <button id="restore">Restore with AI</button>
+      <div id="viewToggle" class="seg" hidden>
+        <button id="showOriginal" aria-pressed="false">Original</button>
+        <button id="showRestored" aria-pressed="true">Restored</button>
+      </div>
+      <p class="muted">Sharpens the photo with ComfyUI. Takes a while; set the framing first.</p>
+    </div>
     <div class="row">
       <a id="download" class="btn primary disabled" download="card.png">Download</a>
       <button id="save" hidden disabled>Save to folder</button>
@@ -95,8 +107,8 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { id: null, dx: 0, dy: 0, url: null };
-let timer = null, seq = 0;
+const state = { id: null, dx: 0, dy: 0, url: null, restored: false, showRestored: true, canRestore: false };
+let timer = null, seq = 0, restoring = null;
 
 const d = new Date();
 $("date").value = d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" });
@@ -106,11 +118,14 @@ function status(msg, isError = false) {
   $("status").className = isError ? "error" : "";
 }
 
-function form() {
+function form(withCaption = true) {
   const f = new FormData();
   f.append("id", state.id);
-  f.append("date", $("date").value);
-  f.append("name", $("name").value);
+  if (withCaption) {
+    f.append("date", $("date").value);
+    f.append("name", $("name").value);
+    f.append("restored", state.restored && state.showRestored ? "true" : "false");
+  }
   f.append("zoom", $("zoom").value);
   f.append("dx", state.dx);
   f.append("dy", state.dy);
@@ -121,10 +136,19 @@ async function errorText(res) {
   try { return (await res.json()).detail || res.statusText; } catch { return res.statusText; }
 }
 
+function updateRestoreUi() {
+  $("restoreBox").hidden = !state.canRestore || !state.id;
+  $("viewToggle").hidden = !state.restored;
+  $("restore").hidden = state.restored;
+  $("restore").disabled = !!restoring;
+  $("showOriginal").setAttribute("aria-pressed", String(!state.showRestored));
+  $("showRestored").setAttribute("aria-pressed", String(state.showRestored));
+}
+
 async function render() {
   if (!state.id) return;
   const mine = ++seq;
-  status("Updating…");
+  if (!restoring) status("Updating…");
   const res = await fetch("api/card", { method: "POST", body: form() });
   if (mine !== seq) return;  // a newer render is on its way
   if (!res.ok) {
@@ -142,38 +166,73 @@ async function render() {
   $("download").download = stem + ".png";
   $("download").classList.remove("disabled");
   $("save").disabled = false;
-  status("");
+  if (!restoring) status("");
 }
 
 function later() { clearTimeout(timer); timer = setTimeout(render, 250); }
+
+function framingChanged() {
+  // a restore only fits the framing it was made for
+  restoring = null;
+  state.restored = false;
+  updateRestoreUi();
+  later();
+}
 
 $("photo").addEventListener("change", async () => {
   const file = $("photo").files[0];
   if (!file) return;
   state.id = null; state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%";
+  restoring = null; state.restored = false; updateRestoreUi();
   $("download").classList.add("disabled"); $("save").disabled = true;
   status("Finding the face…");
   const f = new FormData(); f.append("photo", file);
   const res = await fetch("api/photo", { method: "POST", body: f });
   if (!res.ok) return status(await errorText(res), true);
   state.id = (await res.json()).id;
+  updateRestoreUi();
   render();
 });
 
 ["date", "name"].forEach((id) => $(id).addEventListener("input", later));
 $("zoom").addEventListener("input", () => {
   $("zoomVal").textContent = Math.round($("zoom").value * 100) + "%";
-  later();
+  framingChanged();
 });
 document.querySelectorAll(".nudge button[data-dx], .nudge button[data-dy]").forEach((b) =>
   b.addEventListener("click", () => {
     state.dx += Number(b.dataset.dx || 0);
     state.dy += Number(b.dataset.dy || 0);
-    later();
+    framingChanged();
   }));
 $("reset").addEventListener("click", () => {
-  state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%"; later();
+  state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%"; framingChanged();
 });
+
+$("restore").addEventListener("click", async () => {
+  const res = await fetch("api/restore", { method: "POST", body: form(false) });
+  if (!res.ok) return status(await errorText(res), true);
+  const job = (await res.json()).job;
+  restoring = job; updateRestoreUi();
+  const words = { queued: "Waiting for ComfyUI", running: "Restoring" };
+  while (restoring === job) {
+    const r = await fetch("api/restore/" + job);
+    if (restoring !== job) return;  // framing changed meanwhile
+    if (!r.ok) { restoring = null; updateRestoreUi(); return status(await errorText(r), true); }
+    const s = await r.json();
+    if (s.state === "done") {
+      restoring = null; state.restored = true; state.showRestored = true;
+      updateRestoreUi();
+      await render();
+      return status("Restored in " + s.seconds + " s.");
+    }
+    if (s.state === "error") { restoring = null; updateRestoreUi(); return status(s.error, true); }
+    status((words[s.state] || s.state) + "… " + s.seconds + " s");
+    await new Promise((ok) => setTimeout(ok, 2000));
+  }
+});
+$("showOriginal").addEventListener("click", () => { state.showRestored = false; updateRestoreUi(); render(); });
+$("showRestored").addEventListener("click", () => { state.showRestored = true; updateRestoreUi(); render(); });
 
 $("save").addEventListener("click", async () => {
   $("save").disabled = true;
@@ -183,7 +242,11 @@ $("save").addEventListener("click", async () => {
   status("Saved as " + (await res.json()).saved);
 });
 
-fetch("api/config").then((r) => r.json()).then((c) => { $("save").hidden = !c.can_save; });
+fetch("api/config").then((r) => r.json()).then((c) => {
+  $("save").hidden = !c.can_save;
+  state.canRestore = c.can_restore;
+  updateRestoreUi();
+});
 </script>
 </body>
 </html>

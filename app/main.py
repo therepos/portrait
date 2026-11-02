@@ -1,15 +1,17 @@
 """Web app: upload a photo once, then re-render the card as the user tweaks it."""
+import asyncio
 import os
 import re
+import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, Response
 
-from . import card
+from . import card, comfy
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
@@ -17,7 +19,8 @@ MAX_PHOTOS = int(os.environ.get("MAX_PHOTOS", "20"))   # photos kept in memory
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
 
 app = FastAPI(title="Portrait card maker")
-_photos: "OrderedDict[str, tuple]" = OrderedDict()   # id -> (photo, face)
+_photos: "OrderedDict[str, dict]" = OrderedDict()  # id -> photo, face, restored
+_jobs: "OrderedDict[str, dict]" = OrderedDict()    # restore jobs
 
 
 def _get(photo_id):
@@ -25,6 +28,10 @@ def _get(photo_id):
         raise HTTPException(404, "Photo expired, please upload it again.")
     _photos.move_to_end(photo_id)
     return _photos[photo_id]
+
+
+def _framing(zoom, dx, dy):
+    return (round(min(max(zoom, 0.5), 2.5), 3), dx, dy)
 
 
 @app.get("/")
@@ -39,7 +46,7 @@ def healthz():
 
 @app.get("/api/config")
 def config():
-    return {"can_save": SAVE_DIR is not None}
+    return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled()}
 
 
 @app.post("/api/photo")
@@ -59,23 +66,79 @@ async def upload(photo: UploadFile = File(...)):
     except Exception:
         raise HTTPException(400, "Could not read that file as a photo.")
     photo_id = uuid.uuid4().hex
-    _photos[photo_id] = (im, face)
+    _photos[photo_id] = {"photo": im, "face": face, "restored": None}
     while len(_photos) > MAX_PHOTOS:
         _photos.popitem(last=False)
     return {"id": photo_id}
 
 
-def _render(photo_id, date, name, zoom, dx, dy):
-    im, face = _get(photo_id)
-    zoom = min(max(zoom, 0.5), 2.5)
-    return card.to_png(card.render(im, face, date, name, zoom, dx, dy))
+def _render(photo_id, date, name, zoom, dx, dy, restored):
+    entry = _get(photo_id)
+    framing = _framing(zoom, dx, dy)
+    if restored:
+        r = entry["restored"]
+        if not r or r[0] != framing:
+            raise HTTPException(409, "The framing changed since the restore. Restore again.")
+        return card.to_png(card.finish(r[1], date, name))
+    return card.to_png(card.render(entry["photo"], entry["face"], date, name, *framing))
 
 
 @app.post("/api/card")
 async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
-    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
+                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
+                    restored: bool = Form(False)):
+    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy, restored)
     return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+async def _run_restore(job, entry, framing):
+    t = card.TEMPLATE
+    size = comfy.model_size(t.width, t.height)
+    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=size[1] - t.height)
+    # send the photo's own pixels; only shrink when there are more than needed
+    box_w, box_h = box[2] - box[0], box[3] - box[1]
+    send = size if box_w >= size[0] else (round(box_w), round(box_h))
+    picture = card.crop(entry["photo"], box, send)
+
+    def status(s):
+        job["state"] = s
+
+    try:
+        result = await comfy.restore(picture, size, status)
+        entry["restored"] = (framing, result)
+        job["state"] = "done"
+    except comfy.ComfyError as e:
+        job.update(state="error", error=str(e))
+    except Exception as e:
+        job.update(state="error", error=f"Restore failed ({e.__class__.__name__}).")
+    job["finished"] = time.monotonic()
+
+
+@app.post("/api/restore")
+async def start_restore(id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
+    if not comfy.enabled():
+        raise HTTPException(400, "AI restore is not set up on this server.")
+    entry = _get(id)
+    framing = _framing(zoom, dx, dy)
+    job_id = uuid.uuid4().hex
+    job = {"state": "queued", "started": time.monotonic()}
+    _jobs[job_id] = job
+    while len(_jobs) > 50:
+        _jobs.popitem(last=False)
+    if entry["restored"] and entry["restored"][0] == framing:
+        job["state"] = "done"
+    else:
+        job["task"] = asyncio.create_task(_run_restore(job, entry, framing))
+    return {"job": job_id}
+
+
+@app.get("/api/restore/{job_id}")
+def restore_status(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown restore job.")
+    end = job.get("finished", time.monotonic())
+    return {"state": job["state"], "error": job.get("error"), "seconds": round(end - job["started"])}
 
 
 def _safe_stem(name):
@@ -86,10 +149,11 @@ def _safe_stem(name):
 
 @app.post("/api/save")
 async def save(id: str = Form(...), date: str = Form(""), name: str = Form(""),
-               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
+               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0),
+               restored: bool = Form(False)):
     if SAVE_DIR is None:
         raise HTTPException(400, "Saving to a folder is not set up on this server.")
-    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
+    png = await run_in_threadpool(_render, id, date, name, zoom, dx, dy, restored)
     stem = _safe_stem(name)
     out, n = SAVE_DIR / f"{stem}.png", 2
     while out.exists():  # never overwrite
