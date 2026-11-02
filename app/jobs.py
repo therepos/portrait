@@ -231,4 +231,6 @@ async def cleanup():
         for item in store.expired():
             log.info("deleting expired item %s", item["id"])
             store.delete(item["id"])
+        for item_id in store.orphans():
+            store.delete(item_id)
         await asyncio.sleep(3600)

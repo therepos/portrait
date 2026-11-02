@@ -8,11 +8,13 @@
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
     --line: #dddcd6; --accent: #1d1d1b; --accent-text: #ffffff; --error: #b3261e; --bar: #3b6fd8;
+    --thumb: #ecebe7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #161615; --panel: #222220; --text: #ececea; --muted: #a2a29c;
       --line: #3a3a37; --accent: #ececea; --accent-text: #161615; --error: #f2b8b5; --bar: #7da2f0;
+      --thumb: #2c2c2a;
     }
   }
   * { box-sizing: border-box; }
@@ -21,11 +23,12 @@
          font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); align-items: center; }
-  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
-                 font-weight: 600; padding: 10px 14px; color: var(--muted); }
-  .tabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--text); }
-  main { display: grid; gap: 16px; }
-  @media (min-width: 760px) { main { grid-template-columns: 340px 1fr; align-items: start; } }
+  .tabs [role=tab] { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+                     font-weight: 600; padding: 10px 14px; color: var(--muted); }
+  .tabs [role=tab][aria-selected=true] { color: var(--text); border-bottom-color: var(--text); }
+  .tabpanel { display: grid; gap: 16px; }
+  .editor { display: grid; gap: 16px; }
+  @media (min-width: 760px) { .editor { grid-template-columns: 340px 1fr; align-items: start; } }
   h1 { font-size: 20px; margin: 0 0 4px; }
   h2 { font-size: 16px; margin: 0; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
@@ -36,39 +39,39 @@
   input[type=file] { font: inherit; color: var(--text); }
   input[type=range] { width: 100%; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text);
-                 border-radius: 8px; padding: 10px 14px; cursor: pointer; text-decoration: none;
-                 display: inline-flex; align-items: center; justify-content: center; }
-  button.primary, .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button:disabled, .btn.disabled { opacity: .45; pointer-events: none; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text);
+           border-radius: 8px; padding: 10px 14px; cursor: pointer;
+           display: inline-flex; align-items: center; justify-content: center; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .45; pointer-events: none; }
   .small { padding: 6px 10px; font-size: 14px; }
-  .nudge { display: grid; grid-template-columns: repeat(3, 48px); gap: 6px; justify-content: start; }
-  .nudge button { padding: 8px 0; }
   .preview { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
              display: grid; place-items: center; min-height: 320px; }
-  .preview img { max-width: 100%; max-height: 80vh; display: block; border-radius: 4px;
-                 box-shadow: 0 1px 8px rgba(0,0,0,.15); }
+  .stage { position: relative; overflow: hidden; border-radius: 4px; box-shadow: 0 1px 8px rgba(0,0,0,.15);
+           touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+  .stage.dragging { cursor: grabbing; }
+  .stage img { display: block; max-width: 100%; max-height: 80vh; pointer-events: none; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; text-align: center; }
   @media (max-width: 759px) {
-    /* keep the card in view while adjusting it */
+    /* keep the card in view while editing the caption */
     #portraitTab .preview { order: -1; position: sticky; top: 0; z-index: 1; min-height: 0; border-radius: 0 0 12px 12px; }
-    #portraitTab .preview img { max-height: 42vh; }
+    #portraitTab .stage img { max-height: 46vh; }
     .placeholder { padding: 16px 12px; }
   }
   .placeholder { color: var(--muted); text-align: center; padding: 40px 12px; }
   .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center;
           color: var(--muted); cursor: pointer; display: block; }
   .drop.over { border-color: var(--text); color: var(--text); }
-  .restore { display: grid; gap: 8px; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: max-content; }
-  .seg button { border: 0; border-radius: 0; }
-  .seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-text); }
   .status { font-size: 14px; color: var(--muted); min-height: 1.4em; margin: 0; }
   .status.error { color: var(--error); }
   .muted { color: var(--muted); font-size: 13px; margin: 0; }
   .history { display: grid; gap: 10px; }
   .item { display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: start;
           background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
-  .item img { width: 72px; height: 92px; object-fit: cover; border-radius: 6px; background: var(--bg); }
+  .thumb { width: 72px; height: 92px; border-radius: 6px; background: var(--thumb); display: grid;
+           place-items: center; overflow: hidden; color: var(--muted); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb svg { width: 28px; height: 28px; }
   .item .meta { display: grid; gap: 6px; min-width: 0; }
   .item .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
@@ -89,75 +92,73 @@
     <button id="signOut" class="small" hidden>Sign out</button>
   </nav>
 
-  <section id="restoreTab" class="panel">
-    <div>
-      <h1>Restore photos</h1>
-      <p class="muted">Sharpens blurry or small photos with AI. Each one takes a few minutes; you can leave this page and come back.</p>
-    </div>
-    <p id="restoreOff" class="muted" hidden>AI restore is not set up on this server.</p>
-    <label id="drop" class="drop">Tap to choose photos, or drop them here
-      <input id="restoreFiles" type="file" accept="image/*" multiple hidden>
-    </label>
-    <p id="restoreStatus" class="status" role="status"></p>
-  </section>
-
-  <main id="portraitTab" hidden>
+  <div id="restoreTab" class="tabpanel">
     <section class="panel">
       <div>
-        <h1>Portrait card</h1>
-        <p class="muted">Pick a photo, type the caption, then download or save.</p>
+        <h1>Restore photos</h1>
+        <p class="muted">Sharpens blurry or small photos with AI. Each one takes a few minutes; you can leave this page and come back.</p>
       </div>
-      <label>Photo
-        <input id="photo" type="file" accept="image/*">
+      <p id="restoreOff" class="muted" hidden>AI restore is not set up on this server.</p>
+      <label id="drop" class="drop">Tap to choose photos, or drop them here
+        <input id="restoreFiles" type="file" accept="image/*" multiple hidden>
       </label>
-      <label>Date
-        <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
-      </label>
-      <label>Name
-        <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
-      </label>
-      <label>Zoom <span id="zoomVal">100%</span>
-        <input id="zoom" type="range" min="0.6" max="1.8" step="0.02" value="1">
-      </label>
-      <div>
-        <p class="muted" style="margin-bottom:6px">Move photo</p>
-        <div class="nudge">
-          <span></span><button data-dy="-25" aria-label="Up">↑</button><span></span>
-          <button data-dx="-25" aria-label="Left">←</button>
-          <button id="reset" aria-label="Reset framing">⟲</button>
-          <button data-dx="25" aria-label="Right">→</button>
-          <span></span><button data-dy="25" aria-label="Down">↓</button><span></span>
-        </div>
-      </div>
-      <div id="restoreBox" class="restore" hidden>
-        <button id="restore">Restore with AI</button>
-        <div id="restoreBar" class="bar" hidden><div></div></div>
-        <div id="viewToggle" class="seg" hidden>
-          <button id="showOriginal" aria-pressed="false">Original</button>
-          <button id="showRestored" aria-pressed="true">Restored</button>
-        </div>
-        <p class="muted">Restores just the card area, for the most detail. Set the framing first; it is locked while restoring.</p>
-      </div>
-      <div class="row">
-        <button id="download" class="primary" disabled>Download</button>
-        <button id="save" hidden disabled>Save to folder</button>
-      </div>
-      <p id="status" class="status" role="status"></p>
+      <p id="restoreStatus" class="status" role="status"></p>
     </section>
-    <section class="preview">
-      <div id="placeholder" class="placeholder">Your card appears here.</div>
-      <img id="card" alt="Card preview" hidden>
+    <section class="history" aria-label="Restored photos">
+      <div class="row" style="justify-content:space-between">
+        <h2>Restored photos</h2>
+        <span class="muted retention"></span>
+      </div>
+      <div id="restoreList" class="history"></div>
+      <p id="restoreEmpty" class="muted">Photos you restore appear here.</p>
     </section>
-  </main>
+  </div>
 
-  <section class="history" aria-label="History">
-    <div class="row" style="justify-content:space-between">
-      <h2>History</h2>
-      <span id="retention" class="muted"></span>
+  <div id="portraitTab" class="tabpanel" hidden>
+    <div class="editor">
+      <section class="panel">
+        <div>
+          <h1>Portrait card</h1>
+          <p class="muted">Pick a photo, type the caption, then download or save.</p>
+        </div>
+        <label>Photo
+          <input id="photo" type="file" accept="image/*">
+        </label>
+        <label>Date
+          <input id="date" type="text" placeholder="13 Nov" autocomplete="off">
+        </label>
+        <label>Name
+          <input id="name" type="text" placeholder="Felicia 費子玹" autocomplete="off">
+        </label>
+        <label>Zoom <span id="zoomVal">100%</span>
+          <input id="zoom" type="range" min="0.6" max="1.8" step="0.02" value="1">
+        </label>
+        <div class="row">
+          <button id="reset" class="small" disabled>Reset framing</button>
+        </div>
+        <div class="row">
+          <button id="download" class="primary" disabled>Download</button>
+          <button id="save" hidden disabled>Save to folder</button>
+        </div>
+        <p id="status" class="status" role="status"></p>
+      </section>
+      <section class="preview">
+        <div id="placeholder" class="placeholder">Your card appears here.</div>
+        <div>
+          <div id="stage" class="stage" hidden><img id="card" alt="Card preview" draggable="false"></div>
+          <p id="hint" class="hint" hidden>Drag the photo to move it. Scroll or pinch to zoom.</p>
+        </div>
+      </section>
     </div>
-    <div id="historyList" class="history"></div>
-    <p id="historyEmpty" class="muted">Restored photos and cards you make in this browser appear here.</p>
-  </section>
+    <section class="history" aria-label="Portrait cards">
+      <div class="row" style="justify-content:space-between">
+        <h2>Portrait cards</h2>
+        <span class="muted retention"></span>
+      </div>
+      <div id="cardList" class="history"></div>
+      <p id="cardEmpty" class="muted">Cards you download or save appear here.</p>
+    </section>
+  </div>
 </div>
 
 <dialog id="pauseDialog">
@@ -181,9 +182,12 @@ window.fetch = async (...args) => {
 };
 const $ = (id) => document.getElementById(id);
 const config = { can_save: false, can_restore: false };
-const state = { id: null, dx: 0, dy: 0, url: null, restoredItem: null, showRestored: true, portraitJob: null };
+const state = { id: null, dx: 0, dy: 0, zoom: 1, url: null, shown: { dx: 0, dy: 0, zoom: 1 } };
 const FINAL = ["done", "error", "cancelled"];
-let timer = null, seq = 0, items = [];
+const PHOTO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/>' +
+  '<circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>';
+let items = [];
 
 // ---- tabs ----
 function showTab(name) {
@@ -224,29 +228,29 @@ function askToPause(info) {
     done(ok);
   }, { once: true }));
 }
-// POST a restore request, asking first if the GPU must be freed. Returns the item, or null.
-async function requestRestore(url, makeForm, statusFn) {
+
+// ---- restore tab ----
+async function restoreFile(file, st) {
   let allow = storedAllow();
   for (;;) {
-    const f = makeForm();
+    const f = new FormData();
+    f.append("photo", file);
     f.append("allow_pause", allow ? "true" : "false");
-    const res = await fetch(url, { method: "POST", body: f });
+    const res = await fetch("api/restores", { method: "POST", body: f });
     if (res.status === 409) {
       const info = await res.json();
       if (info.needs_pause && !allow) {
-        if (!(await askToPause(info))) { statusFn("Restore cancelled."); return null; }
+        if (!(await askToPause(info))) { st("Restore cancelled."); return false; }
         allow = true;
         continue;
       }
-      statusFn(info.detail || "Cannot restore right now.", true);
-      return null;
+      st(info.detail || "Cannot restore right now.", true);
+      return false;
     }
-    if (!res.ok) { statusFn(await errorText(res), true); return null; }
-    return res.json();
+    if (!res.ok) { st(await errorText(res), true); return false; }
+    return true;
   }
 }
-
-// ---- restore tab ----
 async function restoreFiles(files) {
   const list = [...files].filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
   if (!list.length) return;
@@ -254,8 +258,7 @@ async function restoreFiles(files) {
   let added = 0;
   for (const file of list) {
     st("Uploading " + file.name + "…");
-    const item = await requestRestore("api/restores", () => { const f = new FormData(); f.append("photo", file); return f; }, st);
-    if (!item) return refresh();
+    if (!(await restoreFile(file, st))) return refresh();
     added++;
     await refresh();
   }
@@ -266,11 +269,11 @@ $("restoreFiles").addEventListener("change", () => { restoreFiles($("restoreFile
 ["dragleave", "drop"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
 $("drop").addEventListener("drop", (e) => restoreFiles(e.dataTransfer.files));
 
-// ---- history ----
+// ---- histories ----
 const phaseWords = { queued: "Waiting in queue", pausing: "Freeing the graphics card", loading: "Loading the AI model",
                      steps: "Restoring", finishing: "Finishing" };
 function describe(it) {
-  if (it.state === "done") return it.kind === "card" ? "Portrait card" :
+  if (it.state === "done") return it.kind === "card" ? new Date(it.created * 1000).toLocaleString() :
     "Restored" + (it.seconds ? " in " + minutes(it.seconds).replace("about ", "") : "");
   if (it.state === "error") return it.error || "Failed";
   if (it.state === "cancelled") return "Cancelled";
@@ -289,24 +292,34 @@ function percent(it) {
   if (it.state === "pausing") return 4;
   return 0;
 }
-function renderHistory() {
-  const box = $("historyList");
-  $("historyEmpty").hidden = items.length > 0;
-  const keep = new Set(items.map((i) => i.id));
+function setThumb(el, it) {
+  const box = el.querySelector(".thumb");
+  const key = it.state === "done" ? "done" : "src";
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.innerHTML = PHOTO_ICON;  // placeholder until the picture loads
+  const img = new Image();
+  img.alt = "";
+  img.onload = () => { box.innerHTML = ""; box.append(img); };
+  img.onerror = () => { box.dataset.key = ""; };  // try again on the next refresh
+  img.src = "api/items/" + it.id + "/thumb?" + key;
+}
+function renderList(boxId, emptyId, list) {
+  const box = $(boxId);
+  $(emptyId).hidden = list.length > 0;
+  const keep = new Set(list.map((i) => i.id));
   [...box.children].forEach((el) => { if (!keep.has(el.dataset.id)) el.remove(); });
-  items.forEach((it, idx) => {
+  list.forEach((it, idx) => {
     let el = box.querySelector('[data-id="' + it.id + '"]');
     if (!el) {
       el = document.createElement("div");
       el.className = "item"; el.dataset.id = it.id;
-      el.innerHTML = '<img alt=""><div class="meta"><div class="title"></div><div class="desc status"></div>' +
+      el.innerHTML = '<div class="thumb"></div><div class="meta"><div class="title"></div><div class="desc status"></div>' +
         '<div class="bar" hidden><div></div></div><div class="row actions"></div></div>';
     }
     if (box.children[idx] !== el) box.insertBefore(el, box.children[idx] || null);
-    const img = el.querySelector("img");
-    const thumbKey = it.state === "done" ? "done" : "src";
-    if (img.dataset.key !== thumbKey) { img.dataset.key = thumbKey; img.src = "api/items/" + it.id + "/thumb?" + thumbKey; }
-    el.querySelector(".title").textContent = (it.kind === "card" ? "Card · " : "") + (it.name || "photo");
+    setThumb(el, it);
+    el.querySelector(".title").textContent = it.name || "photo";
     const desc = el.querySelector(".desc");
     desc.textContent = describe(it);
     desc.className = "desc status" + (it.state === "error" ? " error" : "");
@@ -340,9 +353,9 @@ async function refresh() {
     if (!res.ok) return;
     const data = await res.json();
     items = data.items;
-    $("retention").textContent = "Kept for " + data.retention_days + " days";
-    renderHistory();
-    trackPortraitJob();
+    document.querySelectorAll(".retention").forEach((el) => { el.textContent = "Kept for " + data.retention_days + " days"; });
+    renderList("restoreList", "restoreEmpty", items.filter((i) => i.kind === "restore"));
+    renderList("cardList", "cardEmpty", items.filter((i) => i.kind === "card"));
   } catch {}
 }
 function poll() {
@@ -364,76 +377,123 @@ async function createPortrait(itemId) {
 const d = new Date();
 $("date").value = d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" });
 
-function form() {
+function form(view = state) {
   const f = new FormData();
   f.append("id", state.id);
   f.append("date", $("date").value);
   f.append("name", $("name").value);
-  f.append("zoom", $("zoom").value);
-  f.append("dx", state.dx);
-  f.append("dy", state.dy);
-  if (state.restoredItem && state.showRestored) f.append("restored", state.restoredItem);
+  f.append("zoom", view.zoom);
+  f.append("dx", Math.round(view.dx));
+  f.append("dy", Math.round(view.dy));
   return f;
 }
 
-function updateRestoreUi() {
-  const job = state.portraitJob;
-  $("restoreBox").hidden = !config.can_restore || !state.id;
-  $("viewToggle").hidden = !state.restoredItem;
-  $("restore").hidden = !!state.restoredItem;
-  $("restore").textContent = job ? "Cancel restore" : "Restore with AI";
-  $("restoreBar").hidden = !job;
-  document.querySelectorAll("#zoom, #photo, .nudge button").forEach((el) => { el.disabled = !!job; });
-  $("showOriginal").setAttribute("aria-pressed", String(!state.showRestored));
-  $("showRestored").setAttribute("aria-pressed", String(state.showRestored));
-}
-
-function trackPortraitJob() {
-  const id = state.portraitJob;
-  if (!id) return;
-  const it = items.find((i) => i.id === id);
-  if (!it) { state.portraitJob = null; updateRestoreUi(); return; }
-  $("restoreBar").firstElementChild.style.width = percent(it) + "%";
-  if (it.state === "done") {
-    state.portraitJob = null; state.restoredItem = id; state.showRestored = true;
-    updateRestoreUi(); render().then(() => status("Restored."));
-  } else if (it.state === "error" || it.state === "cancelled") {
-    state.portraitJob = null; updateRestoreUi(); status(describe(it), it.state === "error");
-  } else {
-    status(describe(it));
-  }
-}
-
-async function render() {
+// Previews: one request at a time, always for the latest framing. While dragging,
+// the shown picture is shifted and scaled by CSS until the server's version arrives.
+let rendering = false, pending = false, finalTimer = null;
+async function render(preview = false) {
   if (!state.id) return;
-  const mine = ++seq;
-  const res = await fetch("api/card", { method: "POST", body: form() });
-  if (mine !== seq) return;  // a newer render is on its way
-  if (!res.ok) {
-    if (res.status === 404) state.id = null;
-    return status(await errorText(res), true);
+  if (rendering) { pending = true; return; }
+  rendering = true;
+  const view = { dx: Math.round(state.dx), dy: Math.round(state.dy), zoom: state.zoom };
+  const f = form(view);
+  if (preview) f.append("preview", "true");
+  try {
+    const res = await fetch("api/card", { method: "POST", body: f });
+    if (!res.ok) {
+      if (res.status === 404) state.id = null;
+      status(await errorText(res), true);
+      return;
+    }
+    const blob = await res.blob();
+    const used = { dx: Number(res.headers.get("X-Dx")), dy: Number(res.headers.get("X-Dy")), zoom: view.zoom };
+    if (!dragging && !pending) { state.dx = used.dx; state.dy = used.dy; }  // stop at the photo's edges
+    const url = URL.createObjectURL(blob);
+    await new Promise((ok) => { $("card").onload = ok; $("card").onerror = ok; $("card").src = url; });
+    if (state.url) URL.revokeObjectURL(state.url);
+    state.url = url;
+    state.shown = used;
+    applyTransform();
+    $("stage").hidden = false; $("hint").hidden = false;
+    $("placeholder").hidden = true;
+    $("download").disabled = false; $("save").disabled = false; $("reset").disabled = false;
+  } finally {
+    rendering = false;
+    if (pending) { pending = false; render(preview); }
   }
-  const blob = await res.blob();
-  if (state.url) URL.revokeObjectURL(state.url);
-  state.url = URL.createObjectURL(blob);
-  $("card").src = state.url;
-  $("card").hidden = false;
-  $("placeholder").hidden = true;
-  $("download").disabled = false;
-  $("save").disabled = false;
 }
-function later() { clearTimeout(timer); timer = setTimeout(render, 250); }
+function applyTransform() {
+  const img = $("card");
+  const k = img.clientWidth ? img.clientWidth / 1200 : 0;  // screen pixels per card pixel
+  const s = state.zoom / state.shown.zoom;
+  const tx = (state.dx - state.shown.dx * s) * k, ty = (state.dy - state.shown.dy * s) * k;
+  img.style.transformOrigin = "50% 38%";
+  img.style.transform = (tx || ty || s !== 1) ? `translate(${tx}px, ${ty}px) scale(${s})` : "";
+}
+function framingChanged() {
+  $("zoom").value = state.zoom;
+  $("zoomVal").textContent = Math.round(state.zoom * 100) + "%";
+  applyTransform();
+  render(true);
+  clearTimeout(finalTimer);
+  finalTimer = setTimeout(() => render(false), 400);  // a sharp PNG once things settle
+}
+let captionTimer = null;
+["date", "name"].forEach((id) => $(id).addEventListener("input", () => {
+  clearTimeout(captionTimer); captionTimer = setTimeout(() => render(false), 250);
+}));
+$("zoom").addEventListener("input", () => { state.zoom = Number($("zoom").value); framingChanged(); });
+$("reset").addEventListener("click", () => { state.dx = 0; state.dy = 0; state.zoom = 1; framingChanged(); });
+
+// drag to move, wheel or pinch to zoom
+const pointers = new Map();
+let dragging = false, last = null, pinch = null;
+const clampZoom = (z) => Math.min(1.8, Math.max(0.6, z));
+$("stage").addEventListener("pointerdown", (e) => {
+  if (!state.id) return;
+  $("stage").setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  dragging = true; $("stage").classList.add("dragging");
+  last = { x: e.clientX, y: e.clientY };
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: state.zoom };
+  }
+});
+$("stage").addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()];
+    state.zoom = clampZoom(pinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / pinch.dist);
+  } else if (pointers.size === 1) {
+    const k = 1200 / $("card").clientWidth;  // card pixels per screen pixel
+    state.dx += (e.clientX - last.x) * k;
+    state.dy += (e.clientY - last.y) * k;
+    last = { x: e.clientX, y: e.clientY };
+  }
+  framingChanged();
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 1) last = { ...[...pointers.values()][0] };
+  if (pointers.size === 0) { dragging = false; $("stage").classList.remove("dragging"); framingChanged(); }
+}
+["pointerup", "pointercancel"].forEach((ev) => $("stage").addEventListener(ev, endPointer));
+$("stage").addEventListener("wheel", (e) => {
+  if (!state.id) return;
+  e.preventDefault();
+  state.zoom = clampZoom(state.zoom * Math.exp(-e.deltaY * 0.0015));
+  framingChanged();
+}, { passive: false });
+window.addEventListener("resize", applyTransform);
 
 function startSession(id) {
-  state.id = id; state.dx = 0; state.dy = 0; state.restoredItem = null; state.portraitJob = null;
+  state.id = id; state.dx = 0; state.dy = 0; state.zoom = 1;
+  state.shown = { dx: 0, dy: 0, zoom: 1 };
   $("zoom").value = 1; $("zoomVal").textContent = "100%";
-  updateRestoreUi(); status(""); render();
-}
-
-function framingChanged() {
-  state.restoredItem = null;  // a restore only fits the framing it was made for
-  updateRestoreUi();
-  later();
+  status(""); render(false);
 }
 
 $("photo").addEventListener("change", async () => {
@@ -446,42 +506,6 @@ $("photo").addEventListener("change", async () => {
   if (!res.ok) return status(await errorText(res), true);
   startSession((await res.json()).id);
 });
-
-["date", "name"].forEach((id) => $(id).addEventListener("input", later));
-$("zoom").addEventListener("input", () => {
-  $("zoomVal").textContent = Math.round($("zoom").value * 100) + "%";
-  framingChanged();
-});
-document.querySelectorAll(".nudge button[data-dx], .nudge button[data-dy]").forEach((b) =>
-  b.addEventListener("click", () => {
-    state.dx += Number(b.dataset.dx || 0);
-    state.dy += Number(b.dataset.dy || 0);
-    framingChanged();
-  }));
-$("reset").addEventListener("click", () => {
-  state.dx = 0; state.dy = 0; $("zoom").value = 1; $("zoomVal").textContent = "100%"; framingChanged();
-});
-
-$("restore").addEventListener("click", async () => {
-  if (state.portraitJob) {
-    $("restore").disabled = true;
-    await fetch("api/items/" + state.portraitJob + "/cancel", { method: "POST" });
-    $("restore").disabled = false;
-    return refresh();
-  }
-  $("restore").disabled = true;
-  const item = await requestRestore("api/portrait-restore", () => {
-    const f = form(); f.delete("restored"); f.delete("date"); f.delete("name"); return f;
-  }, status);
-  $("restore").disabled = false;
-  if (!item) return;
-  state.portraitJob = item.id;
-  updateRestoreUi();
-  status("Added to the queue. You can follow it in History too.");
-  refresh();
-});
-$("showOriginal").addEventListener("click", () => { state.showRestored = false; updateRestoreUi(); render(); });
-$("showRestored").addEventListener("click", () => { state.showRestored = true; updateRestoreUi(); render(); });
 
 $("download").addEventListener("click", async () => {
   $("download").disabled = true;
@@ -508,7 +532,6 @@ fetch("api/config").then((r) => r.json()).then((c) => {
   $("drop").hidden = !c.can_restore;
   $("signOut").hidden = !c.auth;
   if (c.user) $("signOut").title = "Signed in as " + c.user;
-  updateRestoreUi();
 });
 $("signOut").addEventListener("click", async () => {
   await fetch("api/logout", { method: "POST" });

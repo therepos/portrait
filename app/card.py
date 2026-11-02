@@ -94,8 +94,9 @@ def find_face(photo: Image.Image) -> Face:
     return Face(cx=(x + fw / 2) / s, eye_y=(f[5] + f[7]) / 2 / s, width=fw / s)
 
 
-def frame(photo: Image.Image, face: Face, zoom=1.0, dx=0, dy=0, extra_h=0, t=TEMPLATE):
-    """Area of the photo (in photo pixels) that becomes the card.
+def place(photo: Image.Image, face: Face, zoom=1.0, dx=0, dy=0, extra_h=0, t=TEMPLATE):
+    """Area of the photo (in photo pixels) that becomes the card, and the shift
+    actually applied once the photo's edges are reached.
 
     dx/dy move the photo right/down by that many card pixels. extra_h adds
     rows below the card, for tools that need a taller image than the card.
@@ -103,11 +104,16 @@ def frame(photo: Image.Image, face: Face, zoom=1.0, dx=0, dy=0, extra_h=0, t=TEM
     W, H = t.width, t.height + extra_h
     scale = t.face_width * t.width / face.width * zoom
     scale = max(scale, W / photo.width, H / photo.height)  # card must be fully covered
-    left = face.cx * scale - t.face_cx * t.width - dx
-    top = face.eye_y * scale - t.eye_y * t.height - dy
-    left = min(max(left, 0), photo.width * scale - W)
-    top = min(max(top, 0), photo.height * scale - H)
-    return (left / scale, top / scale, (left + W) / scale, (top + H) / scale)
+    base_x = face.cx * scale - t.face_cx * t.width
+    base_y = face.eye_y * scale - t.eye_y * t.height
+    left = min(max(base_x - dx, 0), photo.width * scale - W)
+    top = min(max(base_y - dy, 0), photo.height * scale - H)
+    box = (left / scale, top / scale, (left + W) / scale, (top + H) / scale)
+    return box, round(base_x - left), round(base_y - top)
+
+
+def frame(photo: Image.Image, face: Face, zoom=1.0, dx=0, dy=0, extra_h=0, t=TEMPLATE):
+    return place(photo, face, zoom, dx, dy, extra_h, t)[0]
 
 
 def crop(photo: Image.Image, box, size) -> Image.Image:
@@ -151,12 +157,20 @@ def finish(picture: Image.Image, date: str, name: str, t=TEMPLATE) -> Image.Imag
     return card
 
 
-def render(photo: Image.Image, face: Face, date: str, name: str, zoom=1.0, dx=0, dy=0, t=TEMPLATE) -> Image.Image:
-    box = frame(photo, face, zoom, dx, dy, t=t)
-    return finish(crop(photo, box, (t.width, t.height)), date, name, t)
+def render(photo: Image.Image, face: Face, date: str, name: str, zoom=1.0, dx=0, dy=0, t=TEMPLATE):
+    """The card, and the shift actually applied (dx, dy) after stopping at the photo's edges."""
+    box, dx, dy = place(photo, face, zoom, dx, dy, t=t)
+    return finish(crop(photo, box, (t.width, t.height)), date, name, t), dx, dy
 
 
 def to_png(card: Image.Image) -> bytes:
     buf = io.BytesIO()
     card.save(buf, "PNG", compress_level=6)
+    return buf.getvalue()
+
+
+def to_jpeg(card: Image.Image) -> bytes:
+    """Quick preview while the user drags or zooms."""
+    buf = io.BytesIO()
+    card.save(buf, "JPEG", quality=85)
     return buf.getvalue()

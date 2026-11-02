@@ -257,7 +257,7 @@ async def start_restore(request: Request, photo: UploadFile = File(...), allow_p
     ask = await _pause_check(allow_pause)
     if ask:
         return ask
-    item = store.create(_owner(request), "restore", state="queued", name=photo.filename or "photo",
+    item = store.create(_owner(request), "restore", publish=False, state="queued", name=photo.filename or "photo",
                         target_size=_restore_target(*im.size), allow_pause=allow_pause, origin="upload")
     await run_in_threadpool(store.put_image, item, "source.png", im)
     await run_in_threadpool(_thumb_of_source, item, im)
@@ -305,49 +305,18 @@ async def photo_from_item(request: Request, item: str = Form(...)):
     return await run_in_threadpool(_session, im, it.get("name") or "photo")
 
 
-def _render(request, photo_id, date, name, zoom, dx, dy, restored):
+def _render(photo_id, date, name, zoom, dx, dy):
     entry = _get(photo_id)
-    framing = _framing(zoom, dx, dy)
-    if restored:
-        it = _item(request, restored)
-        if it.get("photo_id") != photo_id or it.get("framing") != framing or it["state"] != "done":
-            raise HTTPException(409, "The framing changed since the restore. Restore again.")
-        return card.finish(store.get_image(it, "result.png"), date, name)
-    return card.render(entry["photo"], entry["face"], date, name, *framing)
+    return card.render(entry["photo"], entry["face"], date, name, *_framing(zoom, dx, dy))
 
 
 @app.post("/api/card")
-async def make_card(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
-    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
-    return Response(card.to_png(im), media_type="image/png", headers={"Cache-Control": "no-store"})
-
-
-@app.post("/api/portrait-restore")
-async def portrait_restore(request: Request, id: str = Form(...), zoom: float = Form(1.0), dx: int = Form(0),
-                           dy: int = Form(0), allow_pause: bool = Form(False)):
-    """Restore just the framed card area (best detail for a card)."""
-    if not comfy.enabled():
-        raise HTTPException(400, "AI restore is not set up on this server.")
-    _queue_limit(request)
-    entry = _get(id)
-    framing = _framing(zoom, dx, dy)
-    ask = await _pause_check(allow_pause)
-    if ask:
-        return ask
-    t = card.TEMPLATE
-    size = comfy.model_size(t.width, t.height)
-    target = [t.width, round(t.width * size[1] / size[0])]  # a few extra rows, trimmed by the card
-    box = card.frame(entry["photo"], entry["face"], *framing, extra_h=target[1] - t.height)
-    box_w, box_h = box[2] - box[0], box[3] - box[1]
-    send = tuple(target) if box_w >= target[0] else (round(box_w), round(box_h))  # never enlarge here
-    crop = await run_in_threadpool(card.crop, entry["photo"], box, send)
-    item = store.create(_owner(request), "restore", state="queued", name=entry["name"], target_size=target,
-                        allow_pause=allow_pause, origin="portrait", photo_id=id, framing=framing)
-    await run_in_threadpool(store.put_image, item, "source.png", crop)
-    await run_in_threadpool(_thumb_of_source, item, crop)
-    jobs.submit(item)
-    return _public(item)
+async def make_card(id: str = Form(...), date: str = Form(""), name: str = Form(""),
+                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), preview: bool = Form(False)):
+    """Card preview. X-Dx/X-Dy report the shift actually used, after stopping at the photo's edges."""
+    im, dx, dy = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
+    data, kind = (card.to_jpeg(im), "image/jpeg") if preview else (card.to_png(im), "image/png")
+    return Response(data, media_type=kind, headers={"Cache-Control": "no-store", "X-Dx": str(dx), "X-Dy": str(dy)})
 
 
 def _safe_stem(name):
@@ -357,27 +326,28 @@ def _safe_stem(name):
 
 
 async def _keep_card(request, png, name):
-    item = store.create(_owner(request), "card", name=f"{_safe_stem(name)}.png")
+    item = store.create(_owner(request), "card", publish=False, name=f"{_safe_stem(name)}.png")
     store.put_bytes(item, "card.png", png)
     await run_in_threadpool(store.put_thumb, item, card.Image.open(store.path(item, "card.png")))
+    store.save(item)
     return item
 
 
 @app.post("/api/cards")
 async def keep_card(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
-                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
+                    zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
     """Render the card, add it to the history and return its download link."""
-    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
+    im, _, _ = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
     item = await _keep_card(request, card.to_png(im), name)
     return {"item": item["id"], "download": f"api/items/{item['id']}/file"}
 
 
 @app.post("/api/save")
 async def save(request: Request, id: str = Form(...), date: str = Form(""), name: str = Form(""),
-               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0), restored: str = Form("")):
+               zoom: float = Form(1.0), dx: int = Form(0), dy: int = Form(0)):
     if SAVE_DIR is None:
         raise HTTPException(400, "Saving to a folder is not set up on this server.")
-    im = await run_in_threadpool(_render, request, id, date, name, zoom, dx, dy, restored)
+    im, _, _ = await run_in_threadpool(_render, id, date, name, zoom, dx, dy)
     png = card.to_png(im)
     stem = _safe_stem(name)
     out, n = SAVE_DIR / f"{stem}.png", 2

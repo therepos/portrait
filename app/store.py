@@ -35,10 +35,13 @@ def save(item):
     tmp.replace(d / "item.json")
 
 
-def create(owner, kind, **fields):
+def create(owner, kind, publish=True, **fields):
+    """New item. With publish=False it isn't listed until save() is called,
+    so its files can be written first."""
     item = {"id": uuid.uuid4().hex, "owner": owner, "kind": kind, "created": time.time(),
             "state": "done", **fields}
-    save(item)
+    if publish:
+        save(item)
     return item
 
 
@@ -110,3 +113,12 @@ def expired():
     """Finished items older than the retention period."""
     cutoff = time.time() - RETENTION_DAYS * 86400
     return [i for i in all_items() if i["created"] < cutoff and i["state"] in FINAL]
+
+
+def orphans(min_age=86400):
+    """Item folders that never got an item.json (e.g. a crash mid-upload)."""
+    if not ITEMS.exists():
+        return []
+    cutoff = time.time() - min_age
+    return [d.name for d in ITEMS.iterdir()
+            if d.is_dir() and not (d / "item.json").exists() and d.stat().st_mtime < cutoff]

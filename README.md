@@ -50,15 +50,14 @@ back; the queue keeps running. Finished photos can be downloaded or opened with
 
 **Portrait tab:**
 
-1. Pick a photo (or come from **Create Portrait**).
+1. Pick a photo (or come from **Create Portrait** on a restored photo).
 2. Type the date (pre-filled with today) and name.
-3. Check the preview. Use **Zoom** and the arrows if the framing is off, ⟲ to reset.
-4. Optional: **Restore with AI** restores just the card area (the most detail for a
-   card), then compare with the **Original / Restored** switch.
-5. **Download** or **Save to folder**.
+3. Drag the photo in the preview to move it; scroll or pinch (or the slider) to zoom.
+   **Reset framing** goes back to the automatic framing.
+4. **Download** or **Save to folder**.
 
-**History:** restores and cards made in this browser, with Download, Create Portrait and
-Delete. Each browser only sees its own (a random id in a cookie). Items are deleted after
+**History:** each tab lists its own: restored photos (Download, Create Portrait, Delete)
+and portrait cards (Download, Delete). Each browser only sees its own (a random id in a cookie). Items are deleted after
 `RETENTION_DAYS` (default 7). Mount `/data` to keep them across container updates.
 
 ## Sign in
