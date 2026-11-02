@@ -37,7 +37,7 @@ async def lifespan(app):
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-app = FastAPI(title="Portrait card maker", lifespan=lifespan)
+app = FastAPI(title="Portrait: restore and frame", lifespan=lifespan)
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # portrait session id -> photo, face
 
 

@@ -50,7 +50,7 @@ docker compose pull && docker compose up -d
 **Restore tab:** drop or pick photos. Each is restored by AI in the background (a few
 minutes each, one at a time) with a progress bar and time left. Leave the page and come
 back; the queue keeps running. Finished photos can be downloaded or opened with
-**Create Portrait**.
+**Frame Photo**.
 
 **Frame tab:**
 
