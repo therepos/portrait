@@ -1,24 +1,36 @@
 """Web app: upload a photo once, then re-render the card as the user tweaks it."""
 import asyncio
+import logging
 import os
 import re
 import time
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 
-from . import card, comfy
+from . import card, comfy, gpu
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
 MAX_PHOTOS = int(os.environ.get("MAX_PHOTOS", "20"))   # photos kept in memory
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "40"))
 
-app = FastAPI(title="Portrait card maker")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    if gpu.enabled():
+        await gpu.shutdown()
+
+
+app = FastAPI(title="Portrait card maker", lifespan=lifespan)
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # id -> photo, face, restored
 _jobs: "OrderedDict[str, dict]" = OrderedDict()    # restore jobs
 
@@ -103,14 +115,23 @@ async def _run_restore(job, entry, framing):
     def status(s):
         job["state"] = s
 
+    paused = False
     try:
+        if gpu.enabled():
+            job["state"] = "pausing"
+            await gpu.pause(comfy.URL)
+            paused = True
         result = await comfy.restore(picture, size, status)
         entry["restored"] = (framing, result)
         job["state"] = "done"
-    except comfy.ComfyError as e:
+    except (comfy.ComfyError, gpu.PauseError) as e:
         job.update(state="error", error=str(e))
     except Exception as e:
         job.update(state="error", error=f"Restore failed ({e.__class__.__name__}).")
+    finally:
+        if paused:  # hand the GPU back whatever happened
+            await comfy.free()
+            await gpu.resume()
     job["finished"] = time.monotonic()
 
 

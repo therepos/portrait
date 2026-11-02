@@ -66,6 +66,8 @@ top. These numbers were measured from a hand-made card and live in the template
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
 | `COMFYUI_TIMEOUT` | `900` | Seconds to wait for one restore |
+| `PAUSE_UNIT` | unset | systemd unit to stop during a restore (see below) |
+| `PAUSE_HEALTH_URL` | unset | Health URL of that unit, checked after it starts again |
 | `MAX_UPLOAD_MB` | `40` | Largest accepted upload |
 | `MAX_PHOTOS` | `20` | Uploaded photos kept in memory for re-rendering |
 
@@ -93,6 +95,43 @@ workflow says, and fetched over its API.
 
 Restoring needs enough free GPU memory for the model; if another program holds the
 card, ComfyUI reports out of memory and the app shows that.
+
+### Freeing the GPU from another service
+
+If a systemd service on the host (for example a local LLM server) holds the GPU, the
+app can stop it for the length of a restore and start it again afterwards:
+
+```yaml
+    environment:
+      PAUSE_UNIT: llama.service
+      PAUSE_HEALTH_URL: http://host.docker.internal:8080/health   # optional, for the log
+    volumes:
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    security_opt:
+      - apparmor=unconfined   # Docker's default AppArmor profile blocks D-Bus
+```
+
+The container's user (uid 1000 by default) needs permission to start and stop that one
+unit. Install a polkit rule on the host, replacing the user and unit names:
+
+```js
+// /etc/polkit-1/rules.d/50-portrait-gpu.rules
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "llama.service" &&
+        ["start", "stop"].indexOf(action.lookup("verb")) >= 0 &&
+        subject.user == "toor") {
+        return polkit.Result.YES;
+    }
+});
+```
+
+The service is started again when the restore finishes, fails or times out, and when the
+app shuts down. A service that was already stopped is left stopped. After the restore,
+ComfyUI is asked to unload its models first. Anything using the service is cut off while
+it is paused.
 
 ## Develop
 

@@ -214,7 +214,7 @@ $("restore").addEventListener("click", async () => {
   if (!res.ok) return status(await errorText(res), true);
   const job = (await res.json()).job;
   restoring = job; updateRestoreUi();
-  const words = { queued: "Waiting for ComfyUI", running: "Restoring" };
+  const words = { pausing: "Freeing the graphics card", queued: "Waiting for ComfyUI", running: "Restoring" };
   while (restoring === job) {
     const r = await fetch("api/restore/" + job);
     if (restoring !== job) return;  // framing changed meanwhile

@@ -6,3 +6,4 @@ pillow-heif==0.22.0
 opencv-python-headless==4.11.0.86
 numpy==2.2.5
 httpx==0.28.1
+jeepney==0.9.0

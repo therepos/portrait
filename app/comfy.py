@@ -119,3 +119,12 @@ async def restore(picture: Image.Image, size, on_status=lambda s: None) -> Image
         except httpx.HTTPError:
             pass
         raise ComfyError(f"ComfyUI took longer than {int(TIMEOUT)} s.")
+
+
+async def free():
+    """Ask ComfyUI to unload its models so other programs get the GPU back."""
+    try:
+        async with httpx.AsyncClient(base_url=URL, timeout=30) as http:
+            await http.post("/free", json={"unload_models": True, "free_memory": True})
+    except httpx.HTTPError:
+        pass
