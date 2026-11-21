@@ -113,11 +113,69 @@ def _firm(m, solid):
     return a
 
 
-def cut_cartoon(im: Image.Image) -> Image.Image:
-    """Cut out a drawing, keeping its colours exactly."""
+def flat_background(rgb):
+    """The background colour if the picture's edges are one plain colour, else None."""
+    h, w, _ = rgb.shape
+    b = max(2, round(min(h, w) * 0.01))
+    edges = np.concatenate([rgb[:b].reshape(-1, 3), rgb[-b:].reshape(-1, 3),
+                            rgb[:, :b].reshape(-1, 3), rgb[:, -b:].reshape(-1, 3)]).astype(np.float32)
+    colour = np.median(edges, axis=0)
+    return colour if (np.abs(edges - colour).max(axis=1) < 20).mean() > 0.8 else None
+
+
+def _clear_background(rgb, m, a, bg, tol=24, sure=0.93):
+    """On a plain background, big patches of its colour that reach the outside are
+    background even where the model kept them, such as the gap between a tail and a
+    body. Thin lines of that colour (outlines, whiskers) stay because only patches
+    wider than about 4% of the picture count, and patches the model is sure about
+    stay too (a white cat on white)."""
+    h, w, _ = rgb.shape
+    d = np.abs(rgb.astype(np.float32) - bg).max(axis=2)
+    size = max(5, round(min(h, w) * 0.04)) | 1
+    disc = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+    flat = cv2.morphologyEx((d < tol).astype(np.uint8), cv2.MORPH_OPEN, disc(size))
+    n, labels = cv2.connectedComponents(flat, connectivity=4)
+    edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    region = np.isin(labels, edge[edge > 0])
+    # the opening rounds off corners and leaves a soft glow in a shade near the background;
+    # take those back, but only where the model is unsure, so outlines next to the patch stay whole
+    region |= cv2.dilate(region.astype(np.uint8), disc(size // 2 | 1)).astype(bool) & (d < 3 * tol) & (m < sure)
+    kept = region & (m > 0.5)
+    n, labels = cv2.connectedComponents(kept.astype(np.uint8), connectivity=8)
+    if n > 1:
+        mean_m = np.bincount(labels.ravel(), m.ravel(), n) / np.maximum(np.bincount(labels.ravel(), None, n), 1)
+        region &= ~(kept & (mean_m[labels] >= sure))
+    a = a.copy()
+    a[region] = 0
+    # a thin stroke that only edged a patch cleared here is left hanging: drop it
+    newly = (region & (m > 0.5)).astype(np.uint8)
+    if newly.any():
+        thin_k = disc(max(3, round(min(h, w) * 0.015)) | 1)
+        body = a > 0.5
+        thin = body & ~cv2.morphologyEx(body.astype(np.uint8), cv2.MORPH_OPEN, thin_k).astype(bool)
+        near = cv2.dilate(newly, thin_k).astype(bool)
+        a[near & (thin | (a < 0.25))] = 0  # with the faint haze it leaves
+        n, labels, stats, _ = cv2.connectedComponentsWithStats((a > 0.5).astype(np.uint8), 8)
+        if n > 2:  # and any bits of it now floating on their own, with their faint edges
+            areas = stats[:, cv2.CC_STAT_AREA]
+            small = areas < areas[1:].max() * 0.02
+            small[0] = False
+            loose = cv2.dilate(small[labels].astype(np.uint8), disc(5)).astype(bool)
+            a[loose & ~cv2.dilate((~small[labels] & (labels > 0)).astype(np.uint8), disc(3)).astype(bool)] = 0
+    return a
+
+
+def cut_cartoon(im: Image.Image, bg="auto") -> Image.Image:
+    """Cut out a drawing, keeping its colours exactly. bg: the plain background colour,
+    None if there isn't one, or "auto" to look at the picture's edges."""
+    rgb = np.asarray(im.convert("RGB"))
     m = mask(im)
     a = _firm(m, _keep_subject(m > 0.5))
-    rgba = np.dstack([np.asarray(im.convert("RGB")), (a * 255 + 0.5).astype(np.uint8)])
+    if isinstance(bg, str):
+        bg = flat_background(rgb)
+    if bg is not None:
+        a = _clear_background(rgb, m, a, bg)
+    rgba = np.dstack([rgb, (a * 255 + 0.5).astype(np.uint8)])
     return Image.fromarray(rgba, "RGBA")
 
 
@@ -173,7 +231,7 @@ def cut_out(im: Image.Image) -> Image.Image:
     part = im.crop(box)
     if max(part.size) < SMALL and UPSCALE_MODEL.exists():
         part = upscale(part)
-    return cut_cartoon(part)
+    return cut_cartoon(part, flat_background(np.asarray(im)))  # judged on the whole picture
 
 
 def head_crop(photo: Image.Image) -> Image.Image:

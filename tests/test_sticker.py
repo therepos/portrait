@@ -46,6 +46,30 @@ def test_white_background_is_taken_out_of_the_edges(fake_model):
     assert all(px[1] < 120 for px in soft)
 
 
+def test_plain_background_kept_by_the_model_is_cleared(monkeypatch):
+    """A cat on black whose tail leaves a black gap the model wrongly keeps."""
+    im = Image.new("RGB", (400, 400), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle((80, 80, 180, 360), fill=(250, 250, 250), outline=(30, 30, 30), width=4)    # body
+    d.rectangle((260, 80, 330, 360), fill=(250, 250, 250), outline=(30, 30, 30), width=4)   # tail
+    model = np.zeros((400, 400), np.float32)
+    model[76:364, 76:334] = 1.0
+    model[90:350, 190:250] = 0.8      # unsure about the gap, but keeps it
+    monkeypatch.setattr(sticker, "mask", lambda _: model)
+    a = np.asarray(sticker.cut_cartoon(im))[..., 3]
+    assert a[200, 220] == 0                         # the gap is see-through
+    assert a[200, 130] == 255 and a[200, 295] == 255
+    assert a[200, 81] == 255                        # outline kept
+
+
+def test_white_subject_on_white_is_not_cleared(monkeypatch):
+    im = Image.new("RGB", (400, 400), (255, 255, 255))
+    ImageDraw.Draw(im).ellipse((100, 100, 300, 300), outline=(20, 20, 20), width=3)
+    monkeypatch.setattr(sticker, "mask", disc_mask)
+    a = np.asarray(sticker.cut_cartoon(im))[..., 3]
+    assert a[200, 200] == 255
+
+
 def test_specks_dropped_and_small_holes_filled():
     b = np.zeros((200, 200), bool)
     b[50:150, 50:150] = True
