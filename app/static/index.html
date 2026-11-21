@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Portrait · Restore &amp; Frame</title>
+<title>Portrait · Restore, Frame &amp; Stickers</title>
 <style>
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
@@ -88,6 +88,26 @@
   dialog::backdrop { background: rgba(0,0,0,.45); }
   dialog p { margin: 0 0 14px; }
   .check { display: flex; gap: 8px; align-items: center; color: var(--text); margin-bottom: 16px; }
+  textarea { font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+             border-radius: 8px; padding: 10px 12px; width: 100%; resize: vertical; }
+  .choices { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
+  .choices legend { font-size: 14px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+  .choice { display: flex; gap: 10px; align-items: flex-start; color: var(--text); font-size: 15px;
+            border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+  .choice input { margin: 3px 0 0; }
+  .choice small { display: block; color: var(--muted); font-size: 13px; }
+  .choice.off { opacity: .45; pointer-events: none; }
+  .stickers { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px;
+          display: grid; gap: 6px; align-content: start; min-width: 0; }
+  .tile .thumb { width: 100%; height: auto; aspect-ratio: 1; border-radius: 8px;
+                 background: repeating-conic-gradient(var(--thumb) 0 25%, var(--bg) 0 50%) 0 0 / 20px 20px; }
+  .tile .thumb img { object-fit: contain; }
+  .tile.src .thumb img { object-fit: cover; opacity: .6; }
+  .tile .title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .actions { gap: 6px; }
+  .tile .actions button { padding: 5px 8px; font-size: 13px; }
+  .from { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -95,6 +115,7 @@
   <nav class="tabs" role="tablist">
     <button id="tabRestore" role="tab" aria-selected="true">Restore</button>
     <button id="tabPortrait" role="tab" aria-selected="false">Frame</button>
+    <button id="tabSticker" role="tab" aria-selected="false">Stickers</button>
     <span style="flex:1"></span>
     <button id="signOut" class="small" hidden>Sign out</button>
   </nav>
@@ -192,6 +213,73 @@
       <p id="cardEmpty" class="muted">Pictures you download or save appear here.</p>
     </section>
   </div>
+
+  <div id="stickerTab" class="tabpanel" hidden>
+    <section class="panel">
+      <div>
+        <h1>Make stickers</h1>
+        <p class="muted">Stickers are 512×512 with a see-through background, ready for WhatsApp: download one,
+          then in WhatsApp open the sticker tray, tap <b>Create</b> and pick it.</p>
+      </div>
+      <p id="stickerOff" class="muted" hidden>Stickers are not set up on this server.</p>
+      <div id="stickerForm" class="sub" style="border:0;padding:0">
+        <fieldset class="choices">
+          <legend>What is in the picture?</legend>
+          <label class="choice" id="choiceCartoon"><input type="radio" name="mode" value="cartoon" checked>
+            <span>A photo of a person<small>AI draws them as a cartoon. Takes a few minutes; you can leave the page.</small></span></label>
+          <label class="choice" id="choiceCutout"><input type="radio" name="mode" value="cutout">
+            <span>A cartoon or drawing<small>Cut out as it is, in a few seconds.</small></span></label>
+        </fieldset>
+        <label>Picture
+          <input id="stickerPhoto" type="file" accept="image/*">
+        </label>
+        <div id="stickerFrom" class="from" hidden><span class="grow" id="stickerFromName"></span>
+          <button id="stickerFromClear" class="small">Choose another</button></div>
+        <div id="cartoonBox" class="sub">
+          <label>Style
+            <select id="stickerStyle"></select>
+          </label>
+          <div class="row"><button id="styleEditBtn" class="small">Edit styles</button></div>
+          <div id="styleEdit" class="sub" hidden>
+            <label>Name <input id="styleName" type="text" autocomplete="off"></label>
+            <label>What the AI should draw
+              <textarea id="stylePrompt" rows="7"></textarea></label>
+            <label>What to avoid (optional)
+              <textarea id="styleAvoid" rows="3"></textarea></label>
+            <div class="row">
+              <button id="styleSave" class="small primary">Save</button>
+              <button id="styleAdd" class="small">Save as new style</button>
+              <button id="styleDelete" class="small">Delete</button>
+            </div>
+            <div class="row"><button id="styleReset" class="small">Bring back the built-in styles</button></div>
+          </div>
+          <label>How many
+            <select id="stickerVersions">
+              <option value="1">1 sticker</option>
+              <option value="2">2 versions to choose from</option>
+            </select>
+          </label>
+        </div>
+        <label class="switch"><input id="stickerBorder" type="checkbox" checked> White outline</label>
+        <div class="row">
+          <button id="stickerMake" class="primary" disabled>Make sticker</button>
+        </div>
+        <p id="stickerStatus" class="status" role="status"></p>
+      </div>
+    </section>
+    <section class="history" aria-label="Your stickers">
+      <div class="row" style="justify-content:space-between">
+        <h2>Your stickers</h2>
+        <span class="muted">Kept until you delete them</span>
+      </div>
+      <div class="row" id="stickerBulk" hidden>
+        <button id="stickerZip" class="small">Download all (.zip)</button>
+        <button id="stickerSaveAll" class="small" hidden>Save all to folder</button>
+      </div>
+      <div id="stickerList" class="stickers"></div>
+      <p id="stickerEmpty" class="muted">Stickers you make appear here.</p>
+    </section>
+  </div>
 </div>
 
 <dialog id="pauseDialog">
@@ -199,7 +287,7 @@
     <p id="pauseText"></p>
     <label class="check"><input id="alwaysPause" type="checkbox"> Always allow, don't ask again</label>
     <div class="row">
-      <button value="ok" class="primary">Pause and restore</button>
+      <button value="ok" class="primary">Pause and continue</button>
       <button value="cancel">Cancel</button>
     </div>
   </form>
@@ -228,12 +316,15 @@ let items = [];
 function showTab(name) {
   $("tabRestore").setAttribute("aria-selected", String(name === "restore"));
   $("tabPortrait").setAttribute("aria-selected", String(name === "portrait"));
+  $("tabSticker").setAttribute("aria-selected", String(name === "sticker"));
   $("restoreTab").hidden = name !== "restore";
   $("portraitTab").hidden = name !== "portrait";
+  $("stickerTab").hidden = name !== "sticker";
   try { localStorage.setItem("portrait.tab", name); } catch {}
 }
 $("tabRestore").addEventListener("click", () => showTab("restore"));
 $("tabPortrait").addEventListener("click", () => showTab("portrait"));
+$("tabSticker").addEventListener("click", () => showTab("sticker"));
 
 // ---- helpers ----
 function setStatus(el, msg, isError = false) { el.textContent = msg; el.className = "status" + (isError ? " error" : ""); }
@@ -253,7 +344,7 @@ function storedAllow() {
 }
 function askToPause(info) {
   $("pauseText").textContent = info.units.join(", ") + " is using the graphics card (" + info.free_gb +
-    " GB free, about " + info.need_gb + " GB needed). Pause it while restoring? It starts again automatically afterwards.";
+    " GB free, about " + info.need_gb + " GB needed). Pause it while the AI works? It starts again automatically afterwards.";
   $("alwaysPause").checked = false;
   $("pauseDialog").returnValue = "";
   $("pauseDialog").showModal();
@@ -306,8 +397,9 @@ $("drop").addEventListener("drop", (e) => restoreFiles(e.dataTransfer.files));
 
 // ---- histories ----
 const phaseWords = { queued: "Waiting in queue", pausing: "Freeing the graphics card", loading: "Loading the AI model",
-                     steps: "Restoring", finishing: "Finishing" };
+                     steps: "Restoring", finishing: "Finishing", cutting: "Cutting out" };
 function describe(it) {
+  if (it.state === "done" && it.kind === "sticker") return it.mode === "cartoon" ? (it.style || "Cartoon") : "Cut out";
   if (it.state === "done") return it.kind === "card" ? new Date(it.created * 1000).toLocaleString() :
     "Restored" + (it.seconds ? " in " + minutes(it.seconds).replace("about ", "") : "");
   if (it.state === "error") return it.error || "Failed";
@@ -315,6 +407,7 @@ function describe(it) {
   const p = it.progress || {};
   const phase = it.state === "running" ? (p.phase === "queued" ? "loading" : p.phase || "loading") : it.state;
   let s = phaseWords[phase] || phase;
+  if (phase === "steps" && it.kind === "sticker") s = "Drawing";
   if (phase === "steps" && p.steps) s += " " + p.step + "/" + p.steps;
   if (it.eta_seconds != null) s += " · " + minutes(it.eta_seconds) + " left";
   return s;
@@ -323,13 +416,15 @@ function percent(it) {
   const p = it.progress || {};
   if (it.state === "running" && p.phase === "steps" && p.steps) return 15 + 80 * p.step / p.steps;
   if (it.state === "running" && p.phase === "finishing") return 97;
+  if (it.state === "running" && p.phase === "cutting") return it.mode === "cartoon" ? 98 : 50;
   if (it.state === "running") return 8;
   if (it.state === "pausing") return 4;
   return 0;
 }
 function setThumb(el, it) {
   const box = el.querySelector(".thumb");
-  const key = it.state === "done" ? "done" : "src";
+  const key = it.state === "done" ? "done" + (it.border === false ? "n" : "b") : "src";
+  el.classList.toggle("src", key === "src");
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.innerHTML = PHOTO_ICON;  // placeholder until the picture loads
@@ -373,6 +468,7 @@ function renderList(boxId, emptyId, list) {
       if (it.state === "done") {
         add("Download", () => { location.href = "api/items/" + it.id + "/file"; }, true);
         if (it.kind === "restore") add("Frame Photo", () => framePhoto(it.id));
+        if (it.kind === "restore" && config.can_cutout) add("Make Sticker", () => stickerFromRestore(it));
       }
       if (active) add("Cancel", async () => { await fetch("api/items/" + it.id + "/cancel", { method: "POST" }); refresh(); });
       else add("Delete", async () => {
@@ -391,6 +487,7 @@ async function refresh() {
     document.querySelectorAll(".retention").forEach((el) => { el.textContent = "Kept for " + data.retention_days + " days"; });
     renderList("restoreList", "restoreEmpty", items.filter((i) => i.kind === "restore"));
     renderList("cardList", "cardEmpty", items.filter((i) => i.kind === "card"));
+    renderStickers(items.filter((i) => i.kind === "sticker"));
   } catch {}
 }
 function poll() {
@@ -407,6 +504,183 @@ async function framePhoto(itemId) {
   if (!res.ok) return status(await errorText(res), true);
   startSession((await res.json()).id);
 }
+
+// ---- sticker tab ----
+const sticker = { from: null };  // a finished restore to use instead of an upload
+const stStatus = (m, e) => setStatus($("stickerStatus"), m, e);
+function stickerMode() { return document.querySelector('input[name=mode]:checked').value; }
+function showStickerForm() {
+  $("cartoonBox").hidden = stickerMode() !== "cartoon";
+  $("stickerPhoto").parentElement.hidden = !!sticker.from;
+  $("stickerFrom").hidden = !sticker.from;
+  if (sticker.from) $("stickerFromName").textContent = "Restored photo: " + (sticker.from.name || "photo");
+  $("stickerMake").disabled = !(sticker.from || $("stickerPhoto").files.length);
+  $("stickerMake").textContent = stickerMode() === "cartoon" && $("stickerVersions").value === "2" ? "Make 2 stickers" : "Make sticker";
+}
+document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", showStickerForm));
+$("stickerPhoto").addEventListener("change", () => { stStatus(""); showStickerForm(); });
+$("stickerVersions").addEventListener("change", showStickerForm);
+$("stickerFromClear").addEventListener("click", () => { sticker.from = null; showStickerForm(); });
+$("stickerBorder").addEventListener("change", () => { settings.sticker_border = $("stickerBorder").checked; saveSettings(); });
+function stickerFromRestore(it) {
+  sticker.from = { id: it.id, name: it.name };
+  showTab("sticker"); window.scrollTo({ top: 0 }); stStatus(""); showStickerForm();
+}
+
+function fillStyles() {
+  const sel = $("stickerStyle");
+  sel.innerHTML = "";
+  settings.sticker_styles.forEach((st, i) => sel.append(new Option(st.name, i)));
+  sel.value = settings.sticker_style < settings.sticker_styles.length ? settings.sticker_style : 0;
+  fillStyleEditor();
+}
+function fillStyleEditor() {
+  const st = settings.sticker_styles[Number($("stickerStyle").value)] || {};
+  $("styleName").value = st.name || ""; $("stylePrompt").value = st.prompt || ""; $("styleAvoid").value = st.avoid || "";
+  $("styleDelete").disabled = settings.sticker_styles.length < 2;
+}
+$("stickerStyle").addEventListener("change", () => {
+  settings.sticker_style = Number($("stickerStyle").value); saveSettings(); fillStyleEditor();
+});
+$("styleEditBtn").addEventListener("click", () => {
+  $("styleEdit").hidden = !$("styleEdit").hidden;
+  $("styleEditBtn").textContent = $("styleEdit").hidden ? "Edit styles" : "Close";
+});
+function styleFromEditor() {
+  return { name: $("styleName").value.trim() || "My style", prompt: $("stylePrompt").value.trim(), avoid: $("styleAvoid").value.trim() };
+}
+async function storeStyles(msg) {
+  clearTimeout(saveTimer);
+  const res = await fetch("api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+  if (!res.ok) return stStatus(await errorText(res), true);
+  settings = await res.json(); fillStyles(); stStatus(msg);
+}
+$("styleSave").addEventListener("click", () => {
+  const st = styleFromEditor();
+  if (!st.prompt) return stStatus("Describe what the AI should draw first.", true);
+  settings.sticker_styles[Number($("stickerStyle").value)] = st;
+  storeStyles("Saved the style “" + st.name + "”.");
+});
+$("styleAdd").addEventListener("click", () => {
+  const st = styleFromEditor();
+  if (!st.prompt) return stStatus("Describe what the AI should draw first.", true);
+  settings.sticker_styles.push(st); settings.sticker_style = settings.sticker_styles.length - 1;
+  storeStyles("Added the style “" + st.name + "”.");
+});
+$("styleDelete").addEventListener("click", () => {
+  const i = Number($("stickerStyle").value);
+  if (!confirm("Delete the style “" + settings.sticker_styles[i].name + "”?")) return;
+  settings.sticker_styles.splice(i, 1); settings.sticker_style = 0;
+  storeStyles("Style deleted.");
+});
+$("styleReset").addEventListener("click", () => {
+  if (!confirm("Replace your styles with the built-in ones?")) return;
+  settings.sticker_styles = []; settings.sticker_style = 0;  // an empty list brings back the built-in styles
+  storeStyles("Built-in styles are back.");
+});
+
+async function postWithPause(url, f) {
+  // asks before pausing another program on the graphics card, like the Restore tab
+  let allow = storedAllow();
+  for (;;) {
+    f.set("allow_pause", allow ? "true" : "false");
+    const res = await fetch(url, { method: "POST", body: f });
+    if (res.status === 409) {
+      const info = await res.json();
+      if (info.needs_pause && !allow) {
+        if (!(await askToPause(info))) return { cancelled: true };
+        allow = true;
+        continue;
+      }
+      return { error: info.detail || "Cannot start right now." };
+    }
+    if (!res.ok) return { error: await errorText(res) };
+    return { data: await res.json() };
+  }
+}
+$("stickerMake").addEventListener("click", async () => {
+  const f = new FormData();
+  if (sticker.from) f.append("item", sticker.from.id); else f.append("photo", $("stickerPhoto").files[0]);
+  const mode = stickerMode();
+  f.append("mode", mode);
+  f.append("style", $("stickerStyle").value || "0");
+  f.append("versions", $("stickerVersions").value);
+  f.append("border", $("stickerBorder").checked ? "true" : "false");
+  $("stickerMake").disabled = true;
+  stStatus(mode === "cartoon" ? "Finding the face…" : "Uploading…");
+  const r = await postWithPause("api/stickers", f);
+  showStickerForm();
+  if (r.cancelled) return stStatus("Cancelled.");
+  if (r.error) return stStatus(r.error, true);
+  stStatus(mode === "cartoon" ? "Added to the queue below. The AI takes a few minutes per sticker." : "Cutting out below…");
+  $("stickerPhoto").value = ""; sticker.from = null; showStickerForm();
+  refresh();
+});
+
+function renderStickers(list) {
+  const box = $("stickerList");
+  $("stickerEmpty").hidden = list.length > 0;
+  $("stickerBulk").hidden = !list.some((i) => i.state === "done");
+  const keep = new Set(list.map((i) => i.id));
+  [...box.children].forEach((el) => { if (!keep.has(el.dataset.id)) el.remove(); });
+  list.forEach((it, idx) => {
+    let el = box.querySelector('[data-id="' + it.id + '"]');
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "tile"; el.dataset.id = it.id;
+      el.innerHTML = '<div class="thumb"></div><div class="title"></div><div class="desc status"></div>' +
+        '<div class="bar" hidden><div></div></div><div class="row actions"></div>';
+    }
+    if (box.children[idx] !== el) box.insertBefore(el, box.children[idx] || null);
+    setThumb(el, it);
+    el.querySelector(".title").textContent = it.name || "picture";
+    const desc = el.querySelector(".desc");
+    desc.textContent = describe(it);
+    desc.className = "desc status" + (it.state === "error" ? " error" : "");
+    const active = !FINAL.includes(it.state);
+    el.querySelector(".bar").hidden = !active;
+    el.querySelector(".bar > div").style.width = percent(it) + "%";
+    const actions = el.querySelector(".actions");
+    const key = it.state + (it.border === false ? "n" : "b");
+    if (actions.dataset.key === key) return;
+    actions.dataset.key = key;
+    actions.innerHTML = "";
+    const add = (label, fn, primary) => {
+      const b = document.createElement("button");
+      b.className = primary ? "primary" : ""; b.textContent = label;
+      b.addEventListener("click", fn); actions.append(b);
+    };
+    if (it.state === "done") {
+      add("Download", () => { location.href = "api/items/" + it.id + "/file"; }, true);
+      add(it.border === false ? "Add outline" : "No outline", async () => {
+        const f = new FormData(); f.append("border", it.border === false ? "true" : "false");
+        const res = await fetch("api/stickers/" + it.id + "/border", { method: "POST", body: f });
+        if (!res.ok) stStatus(await errorText(res), true);
+        refresh();
+      });
+    }
+    if (it.mode === "cartoon" && FINAL.includes(it.state) && config.can_cartoon) add("Try again", async () => {
+      stStatus("Adding another try…");
+      const r = await postWithPause("api/stickers/" + it.id + "/again", new FormData());
+      if (r.cancelled) return stStatus("Cancelled.");
+      if (r.error) return stStatus(r.error, true);
+      stStatus("Another try is in the queue."); refresh();
+    });
+    if (active) add("Cancel", async () => { await fetch("api/items/" + it.id + "/cancel", { method: "POST" }); refresh(); });
+    else add("Delete", async () => {
+      if (!confirm("Delete this sticker?")) return;
+      await fetch("api/items/" + it.id, { method: "DELETE" }); refresh();
+    });
+  });
+}
+$("stickerZip").addEventListener("click", () => { location.href = "api/stickers.zip"; });
+$("stickerSaveAll").addEventListener("click", async () => {
+  const res = await fetch("api/stickers/save", { method: "POST" });
+  if (!res.ok) return stStatus(await errorText(res), true);
+  const d = await res.json();
+  stStatus(d.added ? "Saved " + d.added + " new sticker" + (d.added > 1 ? "s" : "") + " to the “" + d.folder + "” folder." :
+                     "All stickers are already in the “" + d.folder + "” folder.");
+});
 
 // ---- frame tab: settings (remembered per account) ----
 const d = new Date();
@@ -679,12 +953,21 @@ $("save").addEventListener("click", async () => {
 });
 
 // ---- start ----
-fetch("api/config").then((r) => r.json()).then((c) => {
+const configLoaded = fetch("api/config").then((r) => r.json()).then((c) => {
   Object.assign(config, c);
   $("save").hidden = !c.can_save;
   $("restoreOff").hidden = c.can_restore;
   $("drop").hidden = !c.can_restore;
   $("signOut").hidden = !c.auth;
+  $("stickerSaveAll").hidden = !c.can_save;
+  $("stickerOff").hidden = c.can_cutout;
+  $("stickerForm").hidden = !c.can_cutout;
+  if (!c.can_cartoon) {
+    $("choiceCartoon").classList.add("off");
+    $("choiceCartoon").querySelector("small").textContent = "Needs AI (ComfyUI), which is not set up on this server.";
+    document.querySelector('input[name=mode][value=cutout]').checked = true;
+  }
+  showStickerForm();
   if (c.user) $("signOut").title = "Signed in as " + c.user;
 });
 $("signOut").addEventListener("click", async () => {
@@ -697,11 +980,13 @@ Promise.all([fetch("api/settings").then((r) => r.json()), fetch("api/layouts").t
     fillLayouts();
     $("caption").checked = settings.caption; showCaption();
     fillFonts();
+    $("stickerBorder").checked = settings.sticker_border !== false;
+    fillStyles();
   });
 let startTab = "restore";
 try { startTab = localStorage.getItem("portrait.tab") || "restore"; } catch {}
 showTab(startTab);
-refresh().then(poll);
+configLoaded.catch(() => {}).then(refresh).then(poll);  // history buttons depend on the config
 </script>
 </body>
 </html>

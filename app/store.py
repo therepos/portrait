@@ -1,9 +1,10 @@
-"""History items (restores and cards) kept on disk per browser.
+"""History items (restores, cards and stickers) kept on disk per account or browser.
 
 Each item is a folder DATA_DIR/items/<id>/ holding item.json and its images.
 Items belong to the browser that made them (a random id in a cookie) and are
-deleted after RETENTION_DAYS.
+deleted after RETENTION_DAYS (finished stickers are kept until deleted).
 """
+import copy
 import json
 import os
 import shutil
@@ -110,9 +111,11 @@ def delete(item_id):
 
 
 def expired():
-    """Finished items older than the retention period."""
+    """Finished items older than the retention period. Finished stickers are kept
+    until deleted: they are a collection, not a to-do list."""
     cutoff = time.time() - RETENTION_DAYS * 86400
-    return [i for i in all_items() if i["created"] < cutoff and i["state"] in FINAL]
+    return [i for i in all_items() if i["created"] < cutoff and i["state"] in FINAL
+            and not (i["kind"] == "sticker" and i["state"] == "done")]
 
 
 def orphans(min_age=86400):
@@ -124,7 +127,36 @@ def orphans(min_age=86400):
             if d.is_dir() and not (d / "item.json").exists() and d.stat().st_mtime < cutoff]
 
 
-DEFAULT_SETTINGS = {"layout": "card", "caption": True, "font": "builtin", "custom_layouts": []}
+_AVOID = ("photo, photorealistic, realistic skin texture, other people, background scenery, text, watermark, "
+          "frame, border, added clothing, deformed hands, extra fingers, blurry, low quality")
+# Drawing styles for AI stickers; the first is the default. People can edit them in the page.
+STICKER_STYLES = [
+    {"name": "Cute anime",
+     "prompt": "Redraw the person in the centre of this photo as a polished, cute Studio Ghibli style anime "
+               "illustration for a chat sticker, from the chest up. Keep their likeness: the same face shape, "
+               "hairstyle, hair colour, smile and accessories. Copy their clothing exactly as it is in the photo, "
+               "adding nothing. Polished digital painting with clean soft line art, detailed glossy hair with soft "
+               "highlights, gentle soft shading and a soft glow, large bright expressive eyes, rosy cheeks, smooth "
+               "skin, warm pastel colours. Only this person, centred, with their whole head visible and nothing cut "
+               "off at the top or sides. Remove everyone and everything else. Plain pure white background with no "
+               "shadow, no scenery and no text.",
+     "avoid": _AVOID},
+    {"name": "Webtoon",
+     "prompt": "Redraw the person in the centre of this photo as a soft semi-realistic digital illustration, like "
+               "a polished Korean webtoon portrait, from the chest up, for a chat sticker. Natural proportions, "
+               "natural eye size, the same face shape, features, hairstyle, hair colour and expression as in the "
+               "photo. Copy their clothing exactly as it is in the photo, adding nothing. Thin delicate brown line "
+               "art, soft muted natural colours, light watercolour-like shading, fine hair strands. Only this "
+               "person, centred, with their whole head visible and nothing cut off at the top or sides. Remove "
+               "everyone and everything else. Plain pure white background with no shadow, no glow, no scenery "
+               "and no text.",
+     "avoid": "photo, photorealistic, chibi, childlike, big anime eyes, exaggerated features, glossy plastic hair, "
+              "heavy outlines, saturated colours, glow, other people, background scenery, text, watermark, frame, "
+              "border, added clothing, deformed hands, extra fingers, blurry, low quality"},
+]
+
+DEFAULT_SETTINGS = {"layout": "card", "caption": True, "font": "builtin", "custom_layouts": [],
+                    "sticker_styles": STICKER_STYLES, "sticker_style": 0, "sticker_border": True}
 
 
 def get_settings(owner):
@@ -132,7 +164,7 @@ def get_settings(owner):
         saved = json.loads((DATA_DIR / "settings" / f"{owner}.json").read_text())
     except (OSError, ValueError):
         saved = {}
-    return {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
+    return copy.deepcopy({**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}})
 
 
 def put_settings(owner, settings):

@@ -98,9 +98,9 @@ def load_photo(data: bytes) -> Image.Image:
     return im
 
 
-def find_face(photo: Image.Image) -> Face:
+def find_faces(photo: Image.Image) -> list:
     global _detector
-    rgb = np.asarray(photo)
+    rgb = np.asarray(photo.convert("RGB"))
     s = min(1.0, 1600 / max(rgb.shape[:2]))
     small = cv2.resize(rgb, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else rgb
     h, w = small.shape[:2]
@@ -108,11 +108,16 @@ def find_face(photo: Image.Image) -> Face:
         _detector = cv2.FaceDetectorYN.create(str(ASSETS / "face_detection_yunet.onnx"), "", (w, h), 0.6)
     _detector.setInputSize((w, h))
     _, faces = _detector.detect(cv2.cvtColor(small, cv2.COLOR_RGB2BGR))
-    if faces is None or len(faces) == 0:
+    if faces is None:
+        return []
+    return [Face(cx=(f[0] + f[2] / 2) / s, eye_y=(f[5] + f[7]) / 2 / s, width=f[2] / s) for f in faces]
+
+
+def find_face(photo: Image.Image) -> Face:
+    faces = find_faces(photo)
+    if not faces:
         raise NoFaceError("No face found in the photo.")
-    f = max(faces, key=lambda r: r[2] * r[3])  # biggest face
-    x, _, fw, _ = f[:4]
-    return Face(cx=(x + fw / 2) / s, eye_y=(f[5] + f[7]) / 2 / s, width=fw / s)
+    return max(faces, key=lambda f: f.width)  # biggest face
 
 
 def place(photo: Image.Image, face: Face, layout: Layout, zoom=1.0, dx=0, dy=0):

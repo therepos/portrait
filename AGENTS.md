@@ -5,12 +5,15 @@ covers how it is built and the rules it follows.
 
 ## What it is
 
-A self-hosted web app with two tabs:
+A self-hosted web app with three tabs:
 
 - **Restore**: sends photos through a ComfyUI workflow (Qwen Image Edit) to sharpen them.
   Runs from a queue on disk with live progress.
 - **Frame**: finds the face and frames the photo for a layout (Card, Pinterest, Instagram,
   Story, Profile picture, or a custom size), with drag/zoom and an optional caption strip.
+- **Stickers**: 512×512 transparent WebP stickers for WhatsApp. A photo of a person is
+  redrawn by the same ComfyUI workflow in an editable style (GPU queue); a cartoon is
+  cut out as it is on the CPU (second, quick queue).
 
 Python (FastAPI), one HTML page with plain JavaScript, no build step, one Docker image.
 
@@ -37,7 +40,8 @@ Python (FastAPI), one HTML page with plain JavaScript, no build step, one Docker
 | `app/main.py` | Web server: sign-in middleware, history, restore and frame endpoints, settings |
 | `app/card.py` | Face detection (YuNet), layouts and their framing numbers, caption drawing |
 | `app/fonts.py` | Built-in and uploaded fonts, same-capital-height sizing, Chinese fallback |
-| `app/jobs.py` | Restore queue, progress and time-left estimates, GPU pause per batch |
+| `app/jobs.py` | Queues: AI (restores, cartoon stickers) and CPU (cut-outs); progress, time left, GPU pause per batch |
+| `app/sticker.py` | Cut-out mask (ISNet anime), anime upscaler, white-background cut-out, 512×512 WebP |
 | `app/comfy.py` | ComfyUI client: edits the workflow (input, size, seed), live step progress |
 | `app/gpu.py` / `app/broker.py` | App side / helper container that pauses systemd units over D-Bus |
 | `app/auth.py` | Single-account sign-in with signed cookies and lockout |
@@ -60,6 +64,21 @@ Python (FastAPI), one HTML page with plain JavaScript, no build step, one Docker
 - **Framing**: the face box is a set share of the width and the eye line a set share of the
   height, per layout; custom sizes interpolate from their shape (`card.custom`).
 - A restore takes about 5 minutes on an RTX 4000 SFF (40 steps).
+- **Stickers** follow WhatsApp's rules: 512×512, under 100 KB, 16 px margin, transparent
+  (`sticker.compose`, `sticker.to_webp`). Finished stickers never expire (`store.expired`).
+- **Cut-out models run on the CPU with onnxruntime**, no PyTorch: ISNet anime
+  (`isnet-anime.onnx`, downloaded with a checksum in the Dockerfile to `/models`) and
+  Real-ESRGAN x4plus anime 6B (converted from the `.pth` to ONNX, kept in `app/assets`).
+  General-purpose cut-out models (BiRefNet, ISNet general) failed on cartoons in tests.
+  Only the model's mask is used, never rembg's own cut-out (it greys soft edges).
+- **AI stickers are drawn on plain white**, then cut out: near the outline white counts as
+  background and is unmixed from edge colours (`sticker.cut_white`); this clears the gaps
+  between hair strands that the mask alone leaves speckled.
+- **Style prompts replace the workflow's prompts** by following the sampler's positive and
+  negative inputs back to their text nodes (`comfy.set_prompts`). Built-in styles are in
+  `store.STICKER_STYLES`; people edit their own copy in the page. *Cute anime* is the
+  default because people preferred it; the prompt tells the AI to copy clothing as is,
+  after it once invented a turtleneck.
 
 ## Working on it
 

@@ -1,11 +1,13 @@
-"""Web app: restore photos with AI and make portrait cards; history per browser."""
+"""Web app: restore photos with AI, frame them, make stickers; history per account or browser."""
 import asyncio
 import hashlib
+import io
 import logging
 import os
 import re
 import secrets
 import uuid
+import zipfile
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -15,7 +17,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, card, comfy, fonts, gpu, jobs, store
+from . import auth, card, comfy, fonts, gpu, jobs, sticker, store
 
 STATIC = Path(__file__).resolve().parent / "static"
 SAVE_DIR = Path(os.environ["SAVE_DIR"]) if os.environ.get("SAVE_DIR") else None
@@ -37,7 +39,7 @@ async def lifespan(app):
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-app = FastAPI(title="Portrait: restore and frame", lifespan=lifespan)
+app = FastAPI(title="Portrait: restore, frame and stickers", lifespan=lifespan)
 _photos: "OrderedDict[str, dict]" = OrderedDict()  # portrait session id -> photo, face
 
 
@@ -144,6 +146,7 @@ def healthz():
 @app.get("/api/config")
 def config(request: Request):
     return {"can_save": SAVE_DIR is not None, "can_restore": comfy.enabled(), "can_pause": gpu.enabled(),
+            "can_cutout": sticker.available(), "can_cartoon": sticker.available() and comfy.enabled(),
             "retention_days": store.RETENTION_DAYS, "auth": auth.enabled(), "user": request.state.user}
 
 
@@ -157,10 +160,10 @@ async def _read_upload(photo: UploadFile):
         raise HTTPException(400, "Could not read that file as a photo.")
 
 
-def _queue_limit(request):
+def _queue_limit(request, adding=1):
     waiting = [i for i in store.for_owner(_owner(request)) if i["state"] in ("queued", "pausing", "running")]
-    if len(waiting) >= MAX_QUEUED:
-        raise HTTPException(429, f"You already have {len(waiting)} restores waiting. "
+    if len(waiting) + adding > MAX_QUEUED:
+        raise HTTPException(429, f"You already have {len(waiting)} pictures waiting. "
                                  "Add more when some have finished.")
 
 
@@ -190,7 +193,7 @@ def _thumb_of_source(item, im):
 
 def _public(item):
     keep = ("id", "kind", "created", "state", "error", "name", "seconds", "progress", "eta_seconds",
-            "target_size", "origin")
+            "target_size", "origin", "mode", "style", "border")
     return {k: item[k] for k in keep if k in item}
 
 
@@ -203,24 +206,37 @@ def list_items(request: Request):
 @app.get("/api/items/{item_id}/thumb")
 def item_thumb(request: Request, item_id: str):
     item = _item(request, item_id)
+    if item["kind"] == "sticker" and item["state"] == "done" and store.path(item, "sticker.webp").exists():
+        return FileResponse(store.path(item, "sticker.webp"), media_type="image/webp",
+                            headers={"Cache-Control": "no-cache"})
     for name in ("thumb.jpg", "source_thumb.jpg"):
         if store.path(item, name).exists():
             return FileResponse(store.path(item, name), headers={"Cache-Control": "no-cache"})
     raise HTTPException(404, "No picture yet.")
 
 
+def _stem(item):
+    return re.sub(r"[^\w-]+", "-", (item.get("name") or item["kind"]).rsplit(".", 1)[0]).strip("-") or item["kind"]
+
+
 def _download_name(item):
-    stem = re.sub(r"[^\w-]+", "-", (item.get("name") or item["kind"]).rsplit(".", 1)[0]).strip("-") or item["kind"]
+    stem = _stem(item)
+    if item["kind"] == "sticker":
+        return f"{stem}-sticker-{item['id'][:6]}.webp"
     return f"{stem}.png" if item["kind"] == "card" else f"{stem}-restored.png"
+
+
+FILES = {"restore": ("result.png", "image/png"), "card": ("card.png", "image/png"),
+         "sticker": ("sticker.webp", "image/webp")}
 
 
 @app.get("/api/items/{item_id}/file")
 def item_file(request: Request, item_id: str):
     item = _item(request, item_id)
-    name = "result.png" if item["kind"] == "restore" else "card.png"
+    name, media = FILES[item["kind"]]
     if item["state"] != "done" or not store.path(item, name).exists():
         raise HTTPException(409, "Not ready yet.")
-    return FileResponse(store.path(item, name), media_type="image/png", filename=_download_name(item))
+    return FileResponse(store.path(item, name), media_type=media, filename=_download_name(item))
 
 
 @app.post("/api/items/{item_id}/cancel")
@@ -387,6 +403,134 @@ async def save(request: Request, f: Frame = Depends(frame_form)):
     return {"saved": out.name}
 
 
+# ---- sticker tab -----------------------------------------------------------
+
+STICKER_SOURCE_SIDE = 2000  # cut-outs work on at most this; the sticker is 512 anyway
+
+
+async def _sticker_source(request, photo, item):
+    """The picture to make a sticker from: an upload, or a finished restore."""
+    if item:
+        it = _item(request, item)
+        if it["kind"] != "restore" or it["state"] != "done":
+            raise HTTPException(409, "That restore isn't finished.")
+        return await run_in_threadpool(store.get_image, it, "result.png"), it.get("name") or "photo"
+    if photo is None:
+        raise HTTPException(400, "Choose a picture first.")
+    return await _read_upload(photo), photo.filename or "picture"
+
+
+def _style(request, index):
+    styles = store.get_settings(_owner(request))["sticker_styles"]
+    return styles[index] if 0 <= index < len(styles) else styles[0]
+
+
+async def _new_sticker(request, im, name, **fields):
+    item = store.create(_owner(request), "sticker", publish=False, state="queued", name=name, **fields)
+    await run_in_threadpool(store.put_image, item, "source.png", im)
+    await run_in_threadpool(_thumb_of_source, item, im)
+    jobs.submit(item)
+    return item
+
+
+@app.post("/api/stickers")
+async def start_sticker(request: Request, photo: UploadFile | None = File(None), item: str = Form(""),
+                        mode: str = Form("cartoon"), style: int = Form(0), versions: int = Form(1),
+                        border: bool = Form(True), allow_pause: bool = Form(False)):
+    """mode "cartoon": the AI redraws the person in a style; "cutout": a drawing is cut out as it is."""
+    if not sticker.available():
+        raise HTTPException(400, "Stickers are not set up on this server (the cut-out model is missing).")
+    versions = min(max(versions, 1), 2) if mode == "cartoon" else 1
+    _queue_limit(request, versions)
+    im, name = await _sticker_source(request, photo, item)
+    if mode == "cutout":
+        im.thumbnail((STICKER_SOURCE_SIDE, STICKER_SOURCE_SIDE), card.Image.LANCZOS)
+        made = [await _new_sticker(request, im, name, mode="cutout", border=border)]
+        return {"items": [_public(i) for i in made]}
+    if not comfy.enabled():
+        raise HTTPException(400, "AI cartoons are not set up on this server. Try \"Just cut it out\".")
+    try:
+        head = await run_in_threadpool(sticker.head_crop, im)
+    except card.NoFaceError:
+        raise HTTPException(422, "No face found. For a cartoon or drawing, choose \"Just cut it out\".")
+    ask = await _pause_check(allow_pause)
+    if ask:
+        return ask
+    s = _style(request, style)
+    made = [await _new_sticker(request, head, name, mode="cartoon", border=border, style=s["name"],
+                               prompt=s["prompt"], avoid=s.get("avoid", ""), allow_pause=allow_pause)
+            for _ in range(versions)]
+    return {"items": [_public(i) for i in made]}
+
+
+@app.post("/api/stickers/{item_id}/again")
+async def sticker_again(request: Request, item_id: str, allow_pause: bool = Form(False)):
+    """Another AI drawing of the same photo in the same style."""
+    it = _item(request, item_id)
+    if it["kind"] != "sticker" or it.get("mode") != "cartoon":
+        raise HTTPException(400, "Only AI cartoons can be tried again.")
+    if not comfy.enabled():
+        raise HTTPException(400, "AI cartoons are not set up on this server.")
+    _queue_limit(request)
+    ask = await _pause_check(allow_pause)
+    if ask:
+        return ask
+    im = await run_in_threadpool(store.get_image, it, "source.png")
+    new = await _new_sticker(request, im, it["name"], mode="cartoon", border=it.get("border", True),
+                             style=it.get("style"), prompt=it["prompt"], avoid=it.get("avoid", ""),
+                             allow_pause=allow_pause)
+    return _public(new)
+
+
+@app.post("/api/stickers/{item_id}/border")
+async def sticker_border(request: Request, item_id: str, border: bool = Form(...)):
+    """Add or take off the white outline."""
+    it = _item(request, item_id)
+    if it["kind"] != "sticker" or it["state"] != "done" or not store.path(it, "cut.png").exists():
+        raise HTTPException(409, "That sticker isn't finished.")
+    it["border"] = border
+    cut = await run_in_threadpool(lambda: card.Image.open(store.path(it, "cut.png")).convert("RGBA"))
+    await run_in_threadpool(jobs.finish_sticker, it, cut)
+    store.save(it)
+    return _public(it)
+
+
+def _done_stickers(request):
+    return [i for i in store.for_owner(_owner(request))
+            if i["kind"] == "sticker" and i["state"] == "done" and store.path(i, "sticker.webp").exists()]
+
+
+@app.get("/api/stickers.zip")
+def stickers_zip(request: Request):
+    done = _done_stickers(request)
+    if not done:
+        raise HTTPException(404, "No stickers yet.")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:  # WebP is already compressed
+        for i in done:
+            z.write(store.path(i, "sticker.webp"), _download_name(i))
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="stickers.zip"'})
+
+
+@app.post("/api/stickers/save")
+def stickers_save(request: Request):
+    """Copy every sticker into SAVE_DIR/stickers; ones already there are skipped."""
+    if SAVE_DIR is None:
+        raise HTTPException(400, "Saving to a folder is not set up on this server.")
+    folder, added = SAVE_DIR / "stickers", 0
+    try:
+        folder.mkdir(exist_ok=True)
+        for i in _done_stickers(request):
+            out = folder / _download_name(i)
+            if not out.exists():
+                out.write_bytes(store.path(i, "sticker.webp").read_bytes())
+                added += 1
+    except OSError:
+        raise HTTPException(500, f"Cannot write to the save folder ({SAVE_DIR}). Check it exists and is writable by user 1000.")
+    return {"added": added, "folder": "stickers"}
+
+
 # ---- layouts, fonts, settings ----------------------------------------------
 
 @app.get("/api/layouts")
@@ -441,5 +585,19 @@ async def put_settings(request: Request):
             if card.MIN_SIDE <= w <= card.MAX_LAYOUT_SIDE and card.MIN_SIDE <= h <= card.MAX_LAYOUT_SIDE:
                 customs.append({"name": str(c.get("name") or "Custom")[:40], "width": w, "height": h})
         s["custom_layouts"] = customs
+    if isinstance(body.get("sticker_styles"), list):
+        styles = []
+        for st in body["sticker_styles"][:20]:
+            if isinstance(st, dict) and isinstance(st.get("prompt"), str) and st["prompt"].strip():
+                styles.append({"name": str(st.get("name") or "Style").strip()[:40] or "Style",
+                               "prompt": st["prompt"].strip()[:3000],
+                               "avoid": str(st.get("avoid") or "").strip()[:1500]})
+        s["sticker_styles"] = styles or store.DEFAULT_SETTINGS["sticker_styles"]
+    if isinstance(body.get("sticker_style"), int):
+        s["sticker_style"] = body["sticker_style"]
+    if s["sticker_style"] not in range(len(s["sticker_styles"])):
+        s["sticker_style"] = 0
+    if isinstance(body.get("sticker_border"), bool):
+        s["sticker_border"] = body["sticker_border"]
     store.put_settings(_owner(request), s)
     return s

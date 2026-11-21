@@ -57,8 +57,37 @@ def model_size(w, h):
     return best[1], best[2]
 
 
-def _prepare(image_name, size):
+def _prompt_node(wf, link):
+    """The text node feeding a sampler input, following conditioning links back."""
+    seen = set()
+    while isinstance(link, list) and link[0] in wf and link[0] not in seen:
+        seen.add(link[0])
+        inputs = wf[link[0]]["inputs"]
+        for key in ("prompt", "text"):
+            if isinstance(inputs.get(key), str):
+                return inputs, key
+        link = inputs.get("conditioning")
+    return None
+
+
+def set_prompts(wf, positive, negative):
+    """Replace the workflow's own prompt (what to make, and what to avoid)."""
+    samplers = [n for n in wf.values() if n["class_type"] in SAMPLERS]
+    found = False
+    for s in samplers:
+        for side, text in (("positive", positive), ("negative", negative)):
+            hit = _prompt_node(wf, s["inputs"].get(side))
+            if hit:
+                hit[0][hit[1]] = text
+                found = found or side == "positive"
+    if not found:
+        raise ComfyError("Could not find the prompt in the ComfyUI workflow.")
+
+
+def _prepare(image_name, size, prompts=None):
     wf = json.loads(WORKFLOW.read_text())
+    if prompts:
+        set_prompts(wf, *prompts)
     loaders = [k for k, n in wf.items() if n["class_type"] == "LoadImage"]
     if len(loaders) != 1:
         raise ComfyError("The workflow must have exactly one Load Image node.")
@@ -80,10 +109,11 @@ def _prepare(image_name, size):
     return wf, outputs, samplers
 
 
-async def restore(picture: Image.Image, size, on_progress=lambda p: None) -> Image.Image:
+async def restore(picture: Image.Image, size, on_progress=lambda p: None, prompts=None) -> Image.Image:
     """Send picture through the workflow; return the result at exactly `size`.
 
     on_progress gets {"phase": queued|loading|steps|finishing, "step", "steps"}.
+    prompts, if given, is (positive, negative) and replaces the workflow's own.
     """
     buf = io.BytesIO()
     picture.save(buf, "PNG")
@@ -97,7 +127,7 @@ async def restore(picture: Image.Image, size, on_progress=lambda p: None) -> Ima
             r.raise_for_status()
             uploaded = r.json()
             image_ref = f"{uploaded['subfolder']}/{uploaded['name']}" if uploaded.get("subfolder") else uploaded["name"]
-            wf, outputs, samplers = _prepare(image_ref, size)
+            wf, outputs, samplers = _prepare(image_ref, size, prompts)
             listener = asyncio.create_task(_listen(client_id, samplers, progress, on_progress))
             r = await http.post("/prompt", json={"prompt": wf, "client_id": client_id})
         except httpx.HTTPError as e:

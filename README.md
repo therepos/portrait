@@ -1,11 +1,13 @@
 # portrait
 
-A small self-hosted web app with two tools:
+A small self-hosted web app with three tools:
 
 - **Restore:** sharpens blurry or small photos with AI (through your ComfyUI).
 - **Frame:** finds the face and frames the photo for a layout (Pinterest pin, Instagram
   post, story, profile picture, the original card, or your own size). Drag and zoom to
   adjust, and optionally add a white caption strip reading `date | name`.
+- **Stickers:** makes 512×512 see-through WhatsApp stickers: a photo of a person is
+  redrawn as a cartoon by AI, or a cartoon or drawing is cut out as it is.
 
 It started as a replacement for a manual GIMP routine for captioned portrait cards.
 
@@ -73,6 +75,28 @@ Layout, caption, font and saved custom sizes are remembered per account (or per 
 | Story (Instagram, TikTok, Pinterest) | 1080×1920 |
 | Profile picture | 1080×1080 |
 
+**Stickers tab:**
+
+1. Say what is in the picture:
+   - **A photo of a person:** the face nearest the middle is cropped head to chest and
+     the AI redraws it in a **style** (*Cute anime* by default, or *Webtoon*). Styles are
+     plain-language descriptions you can edit, add or delete with **Edit styles**; **Bring
+     back the built-in styles** undoes your changes. Pick **2 versions to choose from** to
+     get two drawings at once. Needs ComfyUI, takes a few minutes each, and asks first if
+     the graphics card has to be freed, like a restore.
+   - **A cartoon or drawing:** cut out as it is, keeping its colours, in a few seconds on
+     the CPU. Small pictures are enlarged first with an anime upscaler.
+2. **White outline** adds the usual sticker border (it can be switched per sticker later).
+3. Each sticker can be downloaded (`.webp`), tried again (AI ones: a new drawing, same
+   style), or deleted. **Download all (.zip)** and **Save all to folder** (into
+   `stickers/` in `SAVE_DIR`, skipping ones already there) keep a backup.
+
+To add one in WhatsApp: open the sticker tray in a chat, tap **Create** and pick the
+downloaded file. Stickers are 512×512, under 100 KB, with a 16 px margin, as WhatsApp
+asks. A restored photo can be sent here with **Make Sticker**.
+
+Stickers are kept until you delete them; `RETENTION_DAYS` does not apply to them.
+
 **History:** each tab lists its own: restored photos (Download, Frame Photo, Delete)
 and framed photos (Download, Delete). Each browser only sees its own (a random id in a cookie). Items are deleted after
 `RETENTION_DAYS` (default 7). Mount `/data` to keep them across container updates.
@@ -113,10 +137,10 @@ card); custom sizes are interpolated from their shape.
 |---|---|---|
 | `SAVE_DIR` | unset | Folder inside the container for **Save to folder** |
 | `DATA_DIR` | `/data` | History and restore queue; mount it to keep them across updates |
-| `RETENTION_DAYS` | `7` | History items are deleted after this many days |
+| `RETENTION_DAYS` | `7` | History items are deleted after this many days (stickers are kept) |
 | `AUTH_USERNAME`, `AUTH_PASSWORD` | unset | The sign-in (see below). Without them the app only shows a setup notice |
 | `ALLOW_NO_LOGIN` | `false` | `true` runs the app with no sign-in, open to anyone who can reach it |
-| `MAX_QUEUED` | `5` | Unfinished restores one person may have at once |
+| `MAX_QUEUED` | `5` | Unfinished restores and stickers one person may have at once |
 | `COMFYUI_URL` | unset | ComfyUI address, e.g. `http://comfyui:8188`. Enables **Restore with AI** |
 | `COMFYUI_WORKFLOW` | `/config/comfyui-workflow.json` | API-format workflow file |
 | `COMFYUI_TIMEOUT` | `900` | Seconds to wait for one restore |
@@ -125,6 +149,7 @@ card); custom sizes are interpolated from their shape.
 | `RESTORE_VRAM_GB` | `16` | Free GPU memory a restore needs before it runs |
 | `MAX_UPLOAD_MB` | `40` | Largest accepted upload |
 | `MAX_PHOTOS` | `20` | Uploaded photos kept in memory for re-rendering |
+| `STICKER_MODELS` | `/models` | Folder holding `isnet-anime.onnx` (included in the image) |
 
 ## AI restore with ComfyUI
 
@@ -135,7 +160,10 @@ card); custom sizes are interpolated from their shape.
 The app changes only three things in the workflow: the image fed to its single
 **Load Image** node, the resize step in front of the model (an automatic resize such as
 `FluxKontextImageScale` is replaced by an exact resize), and the sampler seed. The
-prompt and models come from your file. It sends the framed crop at the photo's own
+prompt and models come from your file. AI stickers use the same workflow with the
+sticker style put in place of its prompts: the text node feeding the sampler's
+*positive* input gets the style's description, the one feeding *negative* gets its
+"avoid" text. It sends the framed crop at the photo's own
 resolution (shrunk only if larger) and has the model work at about
 `COMFYUI_MEGAPIXELS` (default 1.0) in the card's shape, e.g. 896×1152 for 1200×1541.
 Qwen Image Edit stays faithful to the photo near 1 MP but starts re-composing it when
@@ -204,3 +232,5 @@ Every push to `main` builds and publishes `ghcr.io/therepos/portrait:latest`
 | `texgyreheros-bold.otf` | TeX Gyre Heros (Helvetica-style) | GUST Font License |
 | `NotoSansTC-Bold.otf` | Noto Sans CJK TC | SIL Open Font License 1.1 |
 | `face_detection_yunet.onnx` | OpenCV Zoo YuNet | MIT |
+| `realesrgan-x4-anime6b.onnx` | Real-ESRGAN `RealESRGAN_x4plus_anime_6B`, converted to ONNX | BSD 3-Clause |
+| `/models/isnet-anime.onnx` (downloaded at build) | SkyTNT anime-segmentation (ISNet), as published by rembg | Apache 2.0 |

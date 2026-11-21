@@ -1,6 +1,8 @@
-"""Restore queue: runs restores one at a time, keeps their progress and results on disk.
+"""Job queues: AI work (restores and cartoon stickers) runs one at a time on the GPU;
+plain sticker cut-outs run in a second, quick queue on the CPU. Progress and
+results are kept on disk.
 
-A paused GPU service stays paused across back-to-back restores and is handed
+A paused GPU service stays paused across back-to-back AI jobs and is handed
 back when the queue runs empty.
 """
 import asyncio
@@ -10,12 +12,13 @@ import time
 
 from PIL import Image
 
-from . import comfy, gpu, store
+from . import card, comfy, gpu, sticker, store
 
 log = logging.getLogger("portrait.jobs")
 STATS = store.DATA_DIR / "stats.json"
 
-_wake = asyncio.Event()
+_wake = asyncio.Event()       # AI queue
+_cpu_wake = asyncio.Event()   # cut-out queue
 _running: dict = {}      # item id -> asyncio task of the restore in progress
 _lease = None            # GPU pause held while the queue is busy
 _stats = {"load": 60.0, "step": 7.0, "finish": 15.0, "pause": 20.0}  # seconds, refined as restores run
@@ -43,6 +46,8 @@ def estimate(item):
     steps = p.get("steps") or 40
     phase = item["state"] if item["state"] in ("queued", "pausing") else p.get("phase", "queued")
     since = time.time() - p.get("phase_started", time.time())
+    if phase == "cutting":
+        return 5
     if phase == "steps":
         rate = p.get("step_rate") or _stats["step"]
         return (steps - p.get("step", 0)) * rate + _stats["finish"]
@@ -56,14 +61,20 @@ def estimate(item):
     return left
 
 
+def on_gpu(item):
+    return item["kind"] == "restore" or (item["kind"] == "sticker" and item.get("mode") == "cartoon")
+
+
 def with_eta(items):
     """Add eta_seconds to unfinished items, counting the queue ahead of each."""
-    queue = [i for i in store.all_items() if i["state"] not in store.FINAL]
-    ahead, out = 0.0, {}
-    for i in queue:
-        own = estimate(i)
-        out[i["id"]] = round(ahead + own)
-        ahead += own
+    out = {}
+    for gpu_queue, cost in ((True, estimate), (False, lambda i: 10.0)):
+        ahead = 0.0
+        for i in store.all_items():
+            if i["state"] not in store.FINAL and on_gpu(i) == gpu_queue:
+                own = cost(i)
+                out[i["id"]] = round(ahead + own)
+                ahead += own
     for i in items:
         if i["id"] in out:
             i["eta_seconds"] = out[i["id"]]
@@ -73,7 +84,7 @@ def with_eta(items):
 def submit(item):
     item["state"] = "queued"
     store.save(item)
-    _wake.set()
+    (_wake if on_gpu(item) else _cpu_wake).set()
 
 
 async def cancel(item_id):
@@ -133,17 +144,10 @@ async def _ensure_gpu(item):
     return True
 
 
-async def _restore(item):
-    source = store.get_image(item, "source.png")
-    target = tuple(item["target_size"])
-    size = comfy.model_size(*target)
-    # the model's shape at target width; the extra rows at the bottom are trimmed
-    fit = (target[0], round(target[0] * size[1] / size[0]))
-    send = size if source.width >= size[0] else source.size
-    picture = source.resize(send, Image.LANCZOS) if send != source.size else source
-
+async def _comfy(item, picture, size, prompts=None):
+    """Run one AI job with live progress; None if the GPU couldn't be made free."""
     if not await _ensure_gpu(item):
-        return
+        return None
     _set(item, state="running", progress={"phase": "queued", "phase_started": time.time()})
     marks = {"loading": None, "steps": None, "finishing": None, "last_step": (0, None)}
 
@@ -162,30 +166,71 @@ async def _restore(item):
             marks["last_step"] = (p["step"], now)
         _set(item, progress=prog)
 
-    started = time.time()
-    result = await comfy.restore(picture, size, on_progress)
-    result = result.resize(fit, Image.LANCZOS).crop((0, 0, *target))
-    store.put_image(item, "result.png", result)
-    store.put_thumb(item, result)
+    result = await comfy.restore(picture, size, on_progress, prompts)
     if marks["loading"] and marks["steps"]:
         _learn("load", marks["steps"] - marks["loading"])
     if item["progress"].get("step_rate"):
         _learn("step", item["progress"]["step_rate"])
     if marks["finishing"]:
         _learn("finish", time.time() - marks["finishing"])
+    return result
+
+
+async def _restore(item):
+    source = store.get_image(item, "source.png")
+    target = tuple(item["target_size"])
+    size = comfy.model_size(*target)
+    # the model's shape at target width; the extra rows at the bottom are trimmed
+    fit = (target[0], round(target[0] * size[1] / size[0]))
+    send = size if source.width >= size[0] else source.size
+    picture = source.resize(send, Image.LANCZOS) if send != source.size else source
+
+    started = time.time()
+    result = await _comfy(item, picture, size)
+    if result is None:
+        return
+    result = result.resize(fit, Image.LANCZOS).crop((0, 0, *target))
+    store.put_image(item, "result.png", result)
+    store.put_thumb(item, result)
+    _set(item, state="done", seconds=round(time.time() - started), progress=None)
+
+
+def finish_sticker(item, cut):
+    """Keep the cut-out and make the sticker from it (also used to switch the outline)."""
+    store.put_image(item, "cut.png", cut)
+    store.put_bytes(item, "sticker.webp", sticker.to_webp(sticker.compose(cut, item.get("border", True))))
+
+
+async def _sticker(item):
+    started = time.time()
+    source = store.get_image(item, "source.png")
+    if item.get("mode") == "cartoon":
+        size = comfy.model_size(*source.size)
+        picture = source.resize(size, Image.LANCZOS) if source.width >= size[0] else source
+        drawn = await _comfy(item, picture, size, (item["prompt"], item.get("avoid", "")))
+        if drawn is None:
+            return
+        store.put_image(item, "drawn.png", drawn)
+        _set(item, progress={"phase": "cutting", "phase_started": time.time()})
+        cut = await asyncio.to_thread(sticker.cut_white, drawn)
+    else:
+        _set(item, state="running", progress={"phase": "cutting", "phase_started": time.time()})
+        cut = await asyncio.to_thread(sticker.cut_out, source)
+    await asyncio.to_thread(finish_sticker, item, cut)
     _set(item, state="done", seconds=round(time.time() - started), progress=None)
 
 
 async def _run(item):
     try:
-        await _restore(item)
+        await (_restore(item) if item["kind"] == "restore" else _sticker(item))
     except asyncio.CancelledError:
         _set(item, state="cancelled", progress=None)
-    except (comfy.ComfyError, gpu.PauseError) as e:
+    except (comfy.ComfyError, gpu.PauseError, sticker.StickerError, card.NoFaceError) as e:
         _set(item, state="error", error=str(e), progress=None)
     except Exception as e:
-        log.exception("restore %s failed", item["id"])
-        _set(item, state="error", error=f"Restore failed ({e.__class__.__name__}).", progress=None)
+        log.exception("%s %s failed", item["kind"], item["id"])
+        what = "Restore" if item["kind"] == "restore" else "Sticker"
+        _set(item, state="error", error=f"{what} failed ({e.__class__.__name__}).", progress=None)
 
 
 async def _release_gpu():
@@ -196,17 +241,15 @@ async def _release_gpu():
         _lease = None
 
 
-async def worker():
-    _load_stats()
-    for item in store.all_items():  # restart: run anything that was waiting or interrupted
-        if item["state"] not in store.FINAL:
-            submit(item)
+async def _queue(gpu_queue, wake):
+    """Run queued items of one queue, oldest first, one at a time."""
     while True:
-        queue = [i for i in store.all_items() if i["state"] == "queued" and i["kind"] == "restore"]
+        queue = [i for i in store.all_items() if i["state"] == "queued" and on_gpu(i) == gpu_queue]
         if not queue:
-            await _release_gpu()
-            _wake.clear()
-            await _wake.wait()
+            if gpu_queue:
+                await _release_gpu()
+            wake.clear()
+            await wake.wait()
             continue
         item = queue[0]
         task = asyncio.create_task(_run(item))
@@ -220,10 +263,19 @@ async def worker():
                 _set(store.load(item["id"]), state="queued", progress=None)
             except KeyError:
                 pass
-            await _release_gpu()
+            if gpu_queue:
+                await _release_gpu()
             raise
         finally:
             _running.pop(item["id"], None)
+
+
+async def worker():
+    _load_stats()
+    for item in store.all_items():  # restart: run anything that was waiting or interrupted
+        if item["state"] not in store.FINAL:
+            submit(item)
+    await asyncio.gather(_queue(True, _wake), _queue(False, _cpu_wake))
 
 
 async def cleanup():
