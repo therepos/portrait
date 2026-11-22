@@ -13,7 +13,8 @@ A self-hosted web app with three tabs:
   Story, Profile picture, or a custom size), with drag/zoom and an optional caption strip.
 - **Stickers**: 512×512 transparent WebP stickers for WhatsApp. A photo of a person is
   redrawn by the same ComfyUI workflow in an editable style (GPU queue); a cartoon is
-  cut out as it is on the CPU (second, quick queue).
+  cut out as it is on the CPU (second, quick queue), optionally after the AI redraws it
+  crisp ("polish", GPU queue).
 
 Python (FastAPI), one HTML page with plain JavaScript, no build step, one Docker image.
 
@@ -79,6 +80,15 @@ Python (FastAPI), one HTML page with plain JavaScript, no build step, one Docker
   `store.STICKER_STYLES`; people edit their own copy in the page. *Cute anime* is the
   default because people preferred it; the prompt tells the AI to copy clothing as is,
   after it once invented a turtleneck.
+- **Polish** (`store.POLISH`, editable per account) sends a cartoon through the same
+  workflow with a "redraw it crisp, change nothing" prompt; the restore workflow's own
+  prompt is for photos and avoids "cartoon". Tested on a 239×320 cartoon: sharper lines,
+  same picture. The result is then cut out like any cartoon.
+- **Plain backgrounds** (`sticker.flat_background`, `_clear_background`): the cut-out model
+  can keep a patch of background enclosed by the drawing. Big flat patches of the edge
+  colour that reach the outside are cleared unless the model is sure (mean mask ≥ 0.93),
+  so a white cat on white is safe; outlines survive because only patches wider than ~4%
+  count.
 
 ## Working on it
 

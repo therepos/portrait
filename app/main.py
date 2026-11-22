@@ -193,7 +193,7 @@ def _thumb_of_source(item, im):
 
 def _public(item):
     keep = ("id", "kind", "created", "state", "error", "name", "seconds", "progress", "eta_seconds",
-            "target_size", "origin", "mode", "style", "border")
+            "target_size", "origin", "mode", "style", "border", "polish")
     return {k: item[k] for k in keep if k in item}
 
 
@@ -420,6 +420,11 @@ async def _sticker_source(request, photo, item):
     return await _read_upload(photo), photo.filename or "picture"
 
 
+def _polish_fields(request, allow_pause):
+    p = store.get_settings(_owner(request))["polish_prompt"]
+    return {"polish": True, "prompt": p["prompt"], "avoid": p.get("avoid", ""), "allow_pause": allow_pause}
+
+
 def _style(request, index):
     styles = store.get_settings(_owner(request))["sticker_styles"]
     return styles[index] if 0 <= index < len(styles) else styles[0]
@@ -436,8 +441,9 @@ async def _new_sticker(request, im, name, **fields):
 @app.post("/api/stickers")
 async def start_sticker(request: Request, photo: UploadFile | None = File(None), item: str = Form(""),
                         mode: str = Form("cartoon"), style: int = Form(0), versions: int = Form(1),
-                        border: bool = Form(True), allow_pause: bool = Form(False)):
-    """mode "cartoon": the AI redraws the person in a style; "cutout": a drawing is cut out as it is."""
+                        border: bool = Form(True), polish: bool = Form(False), allow_pause: bool = Form(False)):
+    """mode "cartoon": the AI redraws the person in a style; "cutout": a drawing is cut out as it is,
+    after the AI redraws it crisp if polish is on."""
     if not sticker.available():
         raise HTTPException(400, "Stickers are not set up on this server (the cut-out model is missing).")
     versions = min(max(versions, 1), 2) if mode == "cartoon" else 1
@@ -445,7 +451,14 @@ async def start_sticker(request: Request, photo: UploadFile | None = File(None),
     im, name = await _sticker_source(request, photo, item)
     if mode == "cutout":
         im.thumbnail((STICKER_SOURCE_SIDE, STICKER_SOURCE_SIDE), card.Image.LANCZOS)
-        made = [await _new_sticker(request, im, name, mode="cutout", border=border)]
+        if polish:
+            if not comfy.enabled():
+                raise HTTPException(400, "AI polishing is not set up on this server. Turn off \"Polish with AI\".")
+            ask = await _pause_check(allow_pause)
+            if ask:
+                return ask
+        made = [await _new_sticker(request, im, name, mode="cutout", border=border,
+                                   **(_polish_fields(request, allow_pause) if polish else {}))]
         return {"items": [_public(i) for i in made]}
     if not comfy.enabled():
         raise HTTPException(400, "AI cartoons are not set up on this server. Try \"Just cut it out\".")
@@ -465,20 +478,38 @@ async def start_sticker(request: Request, photo: UploadFile | None = File(None),
 
 @app.post("/api/stickers/{item_id}/again")
 async def sticker_again(request: Request, item_id: str, allow_pause: bool = Form(False)):
-    """Another AI drawing of the same photo in the same style."""
+    """Another AI drawing of the same picture: same style, or polished again."""
     it = _item(request, item_id)
-    if it["kind"] != "sticker" or it.get("mode") != "cartoon":
-        raise HTTPException(400, "Only AI cartoons can be tried again.")
+    if it["kind"] != "sticker" or not (it.get("mode") == "cartoon" or it.get("polish")):
+        raise HTTPException(400, "Only stickers made with AI can be tried again.")
     if not comfy.enabled():
-        raise HTTPException(400, "AI cartoons are not set up on this server.")
+        raise HTTPException(400, "AI is not set up on this server.")
     _queue_limit(request)
     ask = await _pause_check(allow_pause)
     if ask:
         return ask
     im = await run_in_threadpool(store.get_image, it, "source.png")
-    new = await _new_sticker(request, im, it["name"], mode="cartoon", border=it.get("border", True),
-                             style=it.get("style"), prompt=it["prompt"], avoid=it.get("avoid", ""),
-                             allow_pause=allow_pause)
+    keep = {k: it[k] for k in ("mode", "style", "polish") if k in it}
+    new = await _new_sticker(request, im, it["name"], border=it.get("border", True), prompt=it["prompt"],
+                             avoid=it.get("avoid", ""), allow_pause=allow_pause, **keep)
+    return _public(new)
+
+
+@app.post("/api/stickers/{item_id}/polish")
+async def sticker_polish(request: Request, item_id: str, allow_pause: bool = Form(False)):
+    """A polished copy of a plain cut-out: the AI redraws the picture crisp, then it is cut out."""
+    it = _item(request, item_id)
+    if it["kind"] != "sticker" or it.get("mode") != "cutout" or it.get("polish"):
+        raise HTTPException(400, "Only plain cut-outs can be polished.")
+    if not comfy.enabled():
+        raise HTTPException(400, "AI polishing is not set up on this server.")
+    _queue_limit(request)
+    ask = await _pause_check(allow_pause)
+    if ask:
+        return ask
+    im = await run_in_threadpool(store.get_image, it, "source.png")
+    new = await _new_sticker(request, im, it["name"], mode="cutout", border=it.get("border", True),
+                             **_polish_fields(request, allow_pause))
     return _public(new)
 
 
@@ -599,5 +630,11 @@ async def put_settings(request: Request):
         s["sticker_style"] = 0
     if isinstance(body.get("sticker_border"), bool):
         s["sticker_border"] = body["sticker_border"]
+    if isinstance(body.get("sticker_polish"), bool):
+        s["sticker_polish"] = body["sticker_polish"]
+    p = body.get("polish_prompt")
+    if isinstance(p, dict) and isinstance(p.get("prompt"), str):
+        s["polish_prompt"] = ({"prompt": p["prompt"].strip()[:3000], "avoid": str(p.get("avoid") or "").strip()[:1500]}
+                              if p["prompt"].strip() else store.DEFAULT_SETTINGS["polish_prompt"])
     store.put_settings(_owner(request), s)
     return s

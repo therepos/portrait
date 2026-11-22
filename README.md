@@ -85,10 +85,15 @@ Layout, caption, font and saved custom sizes are remembered per account (or per 
      get two drawings at once. Needs ComfyUI, takes a few minutes each, and asks first if
      the graphics card has to be freed, like a restore.
    - **A cartoon or drawing:** cut out as it is, keeping its colours, in a few seconds on
-     the CPU. Small pictures are enlarged first with an anime upscaler.
+     the CPU. Small pictures are enlarged first with an anime upscaler. With **Polish with
+     AI first** (on by default when ComfyUI is set up) the AI first redraws the picture
+     crisp and clean, keeping it the same, which helps small or blurry pictures; it takes a
+     few minutes. The polish instructions can be edited in the page. A plain cut-out can
+     be polished later with **Polish with AI**. A plain-colour background is cleared even
+     where the cut-out model keeps a patch of it (say, between a tail and a body).
 2. **White outline** adds the usual sticker border (it can be switched per sticker later).
 3. Each sticker can be downloaded (`.webp`), tried again (AI ones: a new drawing, same
-   style), or deleted. **Download all (.zip)** and **Save all to folder** (into
+   style or polish), or deleted. **Download all (.zip)** and **Save all to folder** (into
    `stickers/` in `SAVE_DIR`, skipping ones already there) keep a backup.
 
 To add one in WhatsApp: open the sticker tray in a chat, tap **Create** and pick the

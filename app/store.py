@@ -155,8 +155,19 @@ STICKER_STYLES = [
               "border, added clothing, deformed hands, extra fingers, blurry, low quality"},
 ]
 
+# Polishing a cartoon before cutting it out: the AI redraws it crisp, changing nothing else
+POLISH = {"prompt": "Restore and upscale this cartoon illustration. Keep everything exactly as it is: the same "
+                    "character, pose, expression, proportions, colours, outlines and background. Redraw it crisp and "
+                    "clean like the original high-quality artwork: smooth sharp line art, clean even colours with soft "
+                    "shading, no blur, no noise, no compression artefacts, no smudges. Do not add, remove or move "
+                    "anything.",
+          "avoid": "different character, changed pose, changed expression, changed colours, changed background, "
+                   "extra objects, blurry, noise, jpeg artifacts, smudged lines, low quality, photo, photorealistic, "
+                   "3d render"}
+
 DEFAULT_SETTINGS = {"layout": "card", "caption": True, "font": "builtin", "custom_layouts": [],
-                    "sticker_styles": STICKER_STYLES, "sticker_style": 0, "sticker_border": True}
+                    "sticker_styles": STICKER_STYLES, "sticker_style": 0, "sticker_border": True,
+                    "sticker_polish": True, "polish_prompt": POLISH}
 
 
 def get_settings(owner):

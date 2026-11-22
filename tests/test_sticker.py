@@ -227,3 +227,53 @@ def test_real_model_cuts_a_drawing():
     cut = sticker.cut_out(character())  # small, so it is enlarged 4x first
     a = np.asarray(cut)[..., 3]
     assert cut.width > 900 and a[a.shape[0] // 2, a.shape[1] // 2] > 200 and a[2, 2] < 30
+
+
+def test_polish_goes_through_the_ai_then_is_cut_out(client, monkeypatch):
+    monkeypatch.setattr(comfy, "enabled", lambda: True)
+
+    async def roomy():
+        return None
+    monkeypatch.setattr(comfy, "vram_free", roomy)
+    r = client.post("/api/stickers", data={"mode": "cutout", "polish": "true"},
+                    files={"photo": ("cat.png", png(disc_picture()), "image/png")})
+    assert r.status_code == 200, r.text
+    item = store.load(r.json()["items"][0]["id"])
+    assert item["polish"] and jobs.on_gpu(item) and item["prompt"] == store.POLISH["prompt"]
+
+    sent = {}
+
+    async def fake_comfy(it, picture, size, prompts=None):
+        sent["prompts"] = prompts
+        return disc_picture().resize(size)
+    monkeypatch.setattr(jobs, "_comfy", fake_comfy)
+    asyncio.run(jobs._sticker(item))
+    done = store.load(item["id"])
+    assert done["state"] == "done" and sent["prompts"][0] == store.POLISH["prompt"]
+    assert store.path(done, "drawn.png").exists()
+
+    # a polished sticker can be tried again; a plain one can be polished
+    again = client.post(f"/api/stickers/{item['id']}/again").json()
+    assert again["polish"] is True
+    plain = client.post("/api/stickers", data={"mode": "cutout", "polish": "false"},
+                        files={"photo": ("cat.png", png(disc_picture()), "image/png")}).json()["items"][0]
+    assert not jobs.on_gpu(store.load(plain["id"]))
+    asyncio.run(jobs._sticker(store.load(plain["id"])))
+    polished = client.post(f"/api/stickers/{plain['id']}/polish")
+    assert polished.status_code == 200 and polished.json()["polish"] is True
+    assert client.post(f"/api/stickers/{item['id']}/polish").status_code == 400
+
+
+def test_polish_needs_ai(client, monkeypatch):
+    monkeypatch.setattr(comfy, "enabled", lambda: False)
+    r = client.post("/api/stickers", data={"mode": "cutout", "polish": "true"},
+                    files={"photo": ("cat.png", png(disc_picture()), "image/png")})
+    assert r.status_code == 400 and "Polish" in r.json()["detail"]
+
+
+def test_polish_instructions_can_be_edited_and_reset(client):
+    s = client.put("/api/settings", json={"polish_prompt": {"prompt": "Make it crisp", "avoid": "blur"},
+                                          "sticker_polish": False}).json()
+    assert s["polish_prompt"] == {"prompt": "Make it crisp", "avoid": "blur"} and s["sticker_polish"] is False
+    s = client.put("/api/settings", json={"polish_prompt": {"prompt": ""}}).json()
+    assert s["polish_prompt"] == store.POLISH

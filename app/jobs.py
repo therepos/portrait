@@ -62,7 +62,8 @@ def estimate(item):
 
 
 def on_gpu(item):
-    return item["kind"] == "restore" or (item["kind"] == "sticker" and item.get("mode") == "cartoon")
+    return item["kind"] == "restore" or (item["kind"] == "sticker" and
+                                         (item.get("mode") == "cartoon" or bool(item.get("polish"))))
 
 
 def with_eta(items):
@@ -213,6 +214,15 @@ async def _sticker(item):
         store.put_image(item, "drawn.png", drawn)
         _set(item, progress={"phase": "cutting", "phase_started": time.time()})
         cut = await asyncio.to_thread(sticker.cut_white, drawn)
+    elif item.get("polish"):  # a cartoon redrawn crisp by the AI first, then cut out as usual
+        size = comfy.model_size(*source.size)
+        picture = source.resize(size, Image.LANCZOS) if source.width >= size[0] else source
+        drawn = await _comfy(item, picture, size, (item["prompt"], item.get("avoid", "")))
+        if drawn is None:
+            return
+        store.put_image(item, "drawn.png", drawn)
+        _set(item, progress={"phase": "cutting", "phase_started": time.time()})
+        cut = await asyncio.to_thread(sticker.cut_out, drawn)
     else:
         _set(item, state="running", progress={"phase": "cutting", "phase_started": time.time()})
         cut = await asyncio.to_thread(sticker.cut_out, source)

@@ -228,7 +228,7 @@
           <label class="choice" id="choiceCartoon"><input type="radio" name="mode" value="cartoon" checked>
             <span>A photo of a person<small>AI draws them as a cartoon. Takes a few minutes; you can leave the page.</small></span></label>
           <label class="choice" id="choiceCutout"><input type="radio" name="mode" value="cutout">
-            <span>A cartoon or drawing<small>Cut out as it is, in a few seconds.</small></span></label>
+            <span>A cartoon or drawing<small>Cut out as it is. AI can polish it first.</small></span></label>
         </fieldset>
         <label>Picture
           <input id="stickerPhoto" type="file" accept="image/*">
@@ -259,6 +259,22 @@
               <option value="2">2 versions to choose from</option>
             </select>
           </label>
+        </div>
+        <div id="polishBox" class="sub" hidden>
+          <label class="switch"><input id="stickerPolish" type="checkbox" checked> Polish with AI first</label>
+          <p class="muted">Redraws the picture crisp and clean before cutting it out, keeping it the same.
+            Best for small or blurry pictures. Takes a few minutes; off, it takes seconds.</p>
+          <div class="row"><button id="polishEditBtn" class="small">Edit polish instructions</button></div>
+          <div id="polishEdit" class="sub" hidden>
+            <label>What the AI should do
+              <textarea id="polishPrompt" rows="6"></textarea></label>
+            <label>What to avoid (optional)
+              <textarea id="polishAvoid" rows="3"></textarea></label>
+            <div class="row">
+              <button id="polishSave" class="small primary">Save</button>
+              <button id="polishReset" class="small">Bring back the built-in instructions</button>
+            </div>
+          </div>
         </div>
         <label class="switch"><input id="stickerBorder" type="checkbox" checked> White outline</label>
         <div class="row">
@@ -399,7 +415,8 @@ $("drop").addEventListener("drop", (e) => restoreFiles(e.dataTransfer.files));
 const phaseWords = { queued: "Waiting in queue", pausing: "Freeing the graphics card", loading: "Loading the AI model",
                      steps: "Restoring", finishing: "Finishing", cutting: "Cutting out" };
 function describe(it) {
-  if (it.state === "done" && it.kind === "sticker") return it.mode === "cartoon" ? (it.style || "Cartoon") : "Cut out";
+  if (it.state === "done" && it.kind === "sticker") return it.mode === "cartoon" ? (it.style || "Cartoon") :
+    it.polish ? "Polished and cut out" : "Cut out";
   if (it.state === "done") return it.kind === "card" ? new Date(it.created * 1000).toLocaleString() :
     "Restored" + (it.seconds ? " in " + minutes(it.seconds).replace("about ", "") : "");
   if (it.state === "error") return it.error || "Failed";
@@ -407,7 +424,7 @@ function describe(it) {
   const p = it.progress || {};
   const phase = it.state === "running" ? (p.phase === "queued" ? "loading" : p.phase || "loading") : it.state;
   let s = phaseWords[phase] || phase;
-  if (phase === "steps" && it.kind === "sticker") s = "Drawing";
+  if (phase === "steps" && it.kind === "sticker") s = it.polish ? "Polishing" : "Drawing";
   if (phase === "steps" && p.steps) s += " " + p.step + "/" + p.steps;
   if (it.eta_seconds != null) s += " · " + minutes(it.eta_seconds) + " left";
   return s;
@@ -416,7 +433,7 @@ function percent(it) {
   const p = it.progress || {};
   if (it.state === "running" && p.phase === "steps" && p.steps) return 15 + 80 * p.step / p.steps;
   if (it.state === "running" && p.phase === "finishing") return 97;
-  if (it.state === "running" && p.phase === "cutting") return it.mode === "cartoon" ? 98 : 50;
+  if (it.state === "running" && p.phase === "cutting") return it.mode === "cartoon" || it.polish ? 98 : 50;
   if (it.state === "running") return 8;
   if (it.state === "pausing") return 4;
   return 0;
@@ -509,8 +526,10 @@ async function framePhoto(itemId) {
 const sticker = { from: null };  // a finished restore to use instead of an upload
 const stStatus = (m, e) => setStatus($("stickerStatus"), m, e);
 function stickerMode() { return document.querySelector('input[name=mode]:checked').value; }
+function polishing() { return stickerMode() === "cutout" && config.can_cartoon && $("stickerPolish").checked; }
 function showStickerForm() {
   $("cartoonBox").hidden = stickerMode() !== "cartoon";
+  $("polishBox").hidden = !(stickerMode() === "cutout" && config.can_cartoon);
   $("stickerPhoto").parentElement.hidden = !!sticker.from;
   $("stickerFrom").hidden = !sticker.from;
   if (sticker.from) $("stickerFromName").textContent = "Restored photo: " + (sticker.from.name || "photo");
@@ -522,6 +541,25 @@ $("stickerPhoto").addEventListener("change", () => { stStatus(""); showStickerFo
 $("stickerVersions").addEventListener("change", showStickerForm);
 $("stickerFromClear").addEventListener("click", () => { sticker.from = null; showStickerForm(); });
 $("stickerBorder").addEventListener("change", () => { settings.sticker_border = $("stickerBorder").checked; saveSettings(); });
+$("stickerPolish").addEventListener("change", () => { settings.sticker_polish = $("stickerPolish").checked; saveSettings(); });
+function fillPolish() {
+  const p = settings.polish_prompt || {};
+  $("polishPrompt").value = p.prompt || ""; $("polishAvoid").value = p.avoid || "";
+}
+$("polishEditBtn").addEventListener("click", () => {
+  $("polishEdit").hidden = !$("polishEdit").hidden;
+  $("polishEditBtn").textContent = $("polishEdit").hidden ? "Edit polish instructions" : "Close";
+});
+$("polishSave").addEventListener("click", async () => {
+  if (!$("polishPrompt").value.trim()) return stStatus("Describe what the AI should do first.", true);
+  settings.polish_prompt = { prompt: $("polishPrompt").value.trim(), avoid: $("polishAvoid").value.trim() };
+  await storeStyles("Saved the polish instructions."); fillPolish();
+});
+$("polishReset").addEventListener("click", async () => {
+  if (!confirm("Replace your polish instructions with the built-in ones?")) return;
+  settings.polish_prompt = { prompt: "", avoid: "" };  // empty brings back the built-in instructions
+  await storeStyles("Built-in polish instructions are back."); fillPolish();
+});
 function stickerFromRestore(it) {
   sticker.from = { id: it.id, name: it.name };
   showTab("sticker"); window.scrollTo({ top: 0 }); stStatus(""); showStickerForm();
@@ -606,13 +644,15 @@ $("stickerMake").addEventListener("click", async () => {
   f.append("style", $("stickerStyle").value || "0");
   f.append("versions", $("stickerVersions").value);
   f.append("border", $("stickerBorder").checked ? "true" : "false");
+  const ai = mode === "cartoon" || polishing();
+  f.append("polish", polishing() ? "true" : "false");
   $("stickerMake").disabled = true;
   stStatus(mode === "cartoon" ? "Finding the face…" : "Uploading…");
   const r = await postWithPause("api/stickers", f);
   showStickerForm();
   if (r.cancelled) return stStatus("Cancelled.");
   if (r.error) return stStatus(r.error, true);
-  stStatus(mode === "cartoon" ? "Added to the queue below. The AI takes a few minutes per sticker." : "Cutting out below…");
+  stStatus(ai ? "Added to the queue below. The AI takes a few minutes per sticker." : "Cutting out below…");
   $("stickerPhoto").value = ""; sticker.from = null; showStickerForm();
   refresh();
 });
@@ -659,13 +699,17 @@ function renderStickers(list) {
         refresh();
       });
     }
-    if (it.mode === "cartoon" && FINAL.includes(it.state) && config.can_cartoon) add("Try again", async () => {
-      stStatus("Adding another try…");
-      const r = await postWithPause("api/stickers/" + it.id + "/again", new FormData());
+    const aiAction = (label, path, msg) => add(label, async () => {
+      stStatus("Adding to the queue…");
+      const r = await postWithPause("api/stickers/" + it.id + "/" + path, new FormData());
       if (r.cancelled) return stStatus("Cancelled.");
       if (r.error) return stStatus(r.error, true);
-      stStatus("Another try is in the queue."); refresh();
+      stStatus(msg); refresh();
     });
+    if ((it.mode === "cartoon" || it.polish) && FINAL.includes(it.state) && config.can_cartoon)
+      aiAction("Try again", "again", "Another try is in the queue.");
+    if (it.mode === "cutout" && !it.polish && it.state === "done" && config.can_cartoon)
+      aiAction("Polish with AI", "polish", "A polished copy is in the queue; this one stays as it is.");
     if (active) add("Cancel", async () => { await fetch("api/items/" + it.id + "/cancel", { method: "POST" }); refresh(); });
     else add("Delete", async () => {
       if (!confirm("Delete this sticker?")) return;
@@ -981,6 +1025,8 @@ Promise.all([fetch("api/settings").then((r) => r.json()), fetch("api/layouts").t
     $("caption").checked = settings.caption; showCaption();
     fillFonts();
     $("stickerBorder").checked = settings.sticker_border !== false;
+    $("stickerPolish").checked = settings.sticker_polish !== false;
+    fillPolish(); showStickerForm();
     fillStyles();
   });
 let startTab = "restore";
